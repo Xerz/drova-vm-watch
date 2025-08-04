@@ -1,14 +1,14 @@
 
 # VM Rebooter
 
-Скрипт для мониторинга состояния удалённого сервиса и перезагрузки виртуальной машины в `libvirt`, когда сессия завершается.  
+Скрипт для мониторинга состояния и перезагрузки виртуальной машины в `libvirt` после завершения игровой сессии.
 
 ## Установка и запуск
 
 ### 1. Клонируем репозиторий
 
 ```bash
-git clone https://github.com/yourname/drova-vm-watch.git
+git clone https://github.com/Xerz/drova-vm-watch.git
 cd drova-vm-watch
 ````
 
