@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
 import time
-import requests
 import libvirt
-import os
+import json
 import logging
+import os
 from dotenv import load_dotenv
 
 # Загружаем переменные из .env
 load_dotenv()
 
-SERVER_UUID = os.getenv("SERVER_UUID")
-USER_ID = os.getenv("USER_ID")
-AUTH_TOKEN = os.getenv("AUTH_TOKEN")
 VM_NAME = os.getenv("VM_NAME", "my-vm")
 SLEEP_TIME = int(os.getenv("SLEEP_TIME", "10"))
+PROCESS_NAME = os.getenv("PROCESS_NAME", "ese.exe")
+SNAPSHOT_NAME = os.getenv("SNAPSHOT_NAME", "clean-state")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-
-ENDPOINT = f"https://services.drova.io/server-manager/servers/{SERVER_UUID}?user_id={USER_ID}"
-HEADERS = {"X-Auth-Token": AUTH_TOKEN}
 
 # Настройка логгера
 logging.basicConfig(
@@ -27,19 +23,53 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_state():
+def is_process_running(dom, process_name):
+    """Проверяем, запущен ли процесс внутри Windows-гостя через qemu-guest-agent"""
     try:
-        r = requests.get(ENDPOINT, headers=HEADERS, timeout=5)
-        r.raise_for_status()
-        data = r.json()
-        return data.get("state")
+        # запускаем tasklist внутри гостя
+        cmd = {
+            "execute": "guest-exec",
+            "arguments": {
+                "path": "cmd.exe",
+                "arg": ["/c", "tasklist"],
+                "capture-output": True,
+            },
+        }
+        result = dom.qemuAgentCommand(json.dumps(cmd), libvirt.VIR_DOMAIN_QEMU_AGENT_COMMAND_DEFAULT, 0)
+        pid = json.loads(result)["return"]["pid"]
+
+        # ждём завершения команды
+        while True:
+            status_cmd = {"execute": "guest-exec-status", "arguments": {"pid": pid}}
+            status_result = dom.qemuAgentCommand(json.dumps(status_cmd), libvirt.VIR_DOMAIN_QEMU_AGENT_COMMAND_DEFAULT, 0)
+            status = json.loads(status_result)["return"]
+            if status["exited"]:
+                output = status.get("out-data", "")
+                return process_name.lower() in output.lower()
+            time.sleep(1)
     except Exception as e:
-        logger.error(f"Ошибка запроса: {e}")
-        return None
+        logger.error(f"Ошибка при проверке процесса: {e}")
+        return False
+
+
+def reset_vm(dom):
+    """Форс выключение → откат снапшота → включение"""
+    try:
+        logger.info("Выключаем ВМ (force off)…")
+        dom.destroy()
+
+        logger.info(f"Откат к снапшоту {SNAPSHOT_NAME}…")
+        snap = dom.snapshotLookupByName(SNAPSHOT_NAME, 0)
+        dom.revertToSnapshot(snap, flags=0)
+
+        logger.info("Запускаем ВМ…")
+        dom.create()
+        logger.info("ВМ успешно восстановлена из снапшота и запущена")
+    except libvirt.libvirtError as e:
+        logger.error(f"Ошибка при восстановлении ВМ: {e}")
 
 
 def main():
-    # Подключаемся к libvirt
     conn = libvirt.open("qemu:///system")
     if conn is None:
         logger.error("Не удалось подключиться к libvirt")
@@ -51,38 +81,21 @@ def main():
         logger.error(f"Виртуальная машина {VM_NAME} не найдена")
         return
 
-    while True:
-        # Ждем BUSY или HANDSHAKE
-        waiting_msg_printed = False
-        while True:
-            state = get_state()
-            if state in ("BUSY", "HANDSHAKE"):
-                logger.info(f"VM {VM_NAME} entered session state: {state}")
-                break
-            if not waiting_msg_printed:
-                logger.info(f"Waiting for BUSY/HANDSHAKE (current: {state})")
-                waiting_msg_printed = True
-            else:
-                logger.debug(f"Still waiting (state={state})")
-            time.sleep(SLEEP_TIME)
+    in_session = False
 
-        # Ждем LISTEN
-        waiting_msg_printed = False
-        while True:
-            state = get_state()
-            if state == "LISTEN":
-                logger.info(f"State changed to LISTEN → rebooting {VM_NAME}")
-                try:
-                    dom.reboot(flags=0)
-                except libvirt.libvirtError as e:
-                    logger.error(f"Ошибка при перезагрузке: {e}")
-                break
-            if not waiting_msg_printed:
-                logger.info(f"Waiting for LISTEN (current: {state})")
-                waiting_msg_printed = True
-            else:
-                logger.debug(f"Still not LISTEN (state={state})")
-            time.sleep(SLEEP_TIME)
+    while True:
+        running = is_process_running(dom, PROCESS_NAME)
+
+        if not in_session and running:
+            in_session = True
+            logger.info(f"Процесс {PROCESS_NAME} запущен → сессия началась")
+
+        elif in_session and not running:
+            in_session = False
+            logger.info(f"Процесс {PROCESS_NAME} завершён → выполняем восстановление ВМ")
+            reset_vm(dom)
+
+        time.sleep(SLEEP_TIME)
 
 
 if __name__ == "__main__":
