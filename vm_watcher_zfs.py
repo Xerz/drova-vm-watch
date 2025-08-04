@@ -75,7 +75,7 @@ def is_process_running(dom, process_name):
         # ждём завершения команды
         while True:
             status_cmd = {"execute": "guest-exec-status", "arguments": {"pid": pid}}
-            status_result = dom.QEMUAgentCommand(json.dumps(status_cmd), libvirt.VIR_DOMAIN_QEMU_AGENT_COMMAND_DEFAULT, 0)
+            status_result = libvirt.virDomainQemuAgentCommand(dom, json.dumps(status_cmd), libvirt.VIR_DOMAIN_QEMU_AGENT_COMMAND_DEFAULT, 0)
             status = json.loads(status_result)["return"]
             if status["exited"]:
                 output = status.get("out-data", "")
