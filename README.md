@@ -44,8 +44,8 @@ cp .env.example .env
 
 ### 5. Запускаем скрипт
 
-
 ```bash
+source rebooter-venv/bin/activate
 python watch_vm.py
 ```
 
@@ -56,7 +56,7 @@ python watch_vm.py
 Работает на `python 3.13.5`
 Man
 
-## ⚙️ Пример работы
+## Пример работы
 
 * Обнаружение окончания сессии:
   * Ждёт, пока сервер перейдёт в состояние `BUSY` или `HANDSHAKE`
