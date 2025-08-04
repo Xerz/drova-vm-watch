@@ -66,22 +66,22 @@ def main():
                 logger.debug(f"Still waiting (state={state})")
             time.sleep(SLEEP_TIME)
 
-        # Ждем окончания BUSY/HANDSHAKE
+        # Ждем LISTEN
         waiting_msg_printed = False
         while True:
             state = get_state()
-            if state is not None and state not in ("BUSY", "HANDSHAKE"):
-                logger.info(f"State changed to {state} → rebooting {VM_NAME}")
+            if state == "LISTEN":
+                logger.info(f"State changed to LISTEN → rebooting {VM_NAME}")
                 try:
                     dom.reboot(flags=0)
                 except libvirt.libvirtError as e:
                     logger.error(f"Ошибка при перезагрузке: {e}")
                 break
             if not waiting_msg_printed:
-                logger.info(f"Waiting end of BUSY/HANDSHAKE (current: {state})")
+                logger.info(f"Waiting for LISTEN (current: {state})")
                 waiting_msg_printed = True
             else:
-                logger.debug(f"Still BUSY/HANDSHAKE (state={state})")
+                logger.debug(f"Still not LISTEN (state={state})")
             time.sleep(SLEEP_TIME)
 
 
