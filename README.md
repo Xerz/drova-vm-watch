@@ -53,8 +53,9 @@ python watch_vm.py
 
 ## Конфигурация
 
-Работает на `python 3.13.5`
-Man
+`python 3.13.5`
+
+`Manjaro Linux`
 
 ## Пример работы
 
