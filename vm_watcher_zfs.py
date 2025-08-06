@@ -17,14 +17,15 @@ AUTH_TOKEN = os.getenv("AUTH_TOKEN")
 
 VM_NAME = os.getenv("VM_NAME", "my-vm")
 SLEEP_TIME = int(os.getenv("SLEEP_TIME", "10"))
-CHECK_INTERVAL = 2  # секунды между проверками статуса ВМ
 PROCESS_NAME = os.getenv("PROCESS_NAME", "ese.exe")
-SNAPSHOT_NAME = os.getenv("SNAPSHOT_NAME", "clean-state")
+SNAPSHOT_NAME = os.getenv("SNAPSHOT_NAME", "clean")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 ZFS_SNAPSHOTS = [
     f"tank/{VM_NAME}@clean",
     f"tank/{VM_NAME}-storage@clean"
 ]
+GRACE_PERIOD = os.getenv("GRACE_PERIOD", "60") # время, которое даётся ВМ для мягкого выключения
+CHECK_INTERVAL = 2  # секунды между проверками статуса ВМ при выключении
 
 
 ENDPOINT = "https://services.drova.io/session-manager/sessions"
@@ -57,20 +58,32 @@ logger = logging.getLogger(__name__)
 
 def reset_vm(dom):
     try:
-        logger.info(f"Откатываем {VM_NAME}")
-        logger.debug("Запрашиваем destroy для VM '%s'", VM_NAME)
-        dom.destroy()
+        logger.info(f"Попытка корректного завершения работы VM '{VM_NAME}'")
+        logger.debug("Запрашиваем graceful shutdown для VM '%s'", VM_NAME)
+        dom.shutdown()
 
-        logger.debug("Ожидаем, пока VM '%s' выключится…", dom.name())
-        # Ждём, пока дом не будет выключен (isActive()==0)
+        # Ожидаем graceful shutdown до GRACE_PERIOD секунд
+        waited = 0
+        while dom.isActive() and waited < GRACE_PERIOD:
+            time.sleep(CHECK_INTERVAL)
+            waited += CHECK_INTERVAL
+        if dom.isActive():
+            logger.warning(
+                "VM '%s' не завершила работу за %s секунд, выполняем принудительное отключение",
+                VM_NAME, GRACE_PERIOD
+            )
+            dom.destroy()
+        else:
+            logger.info("VM '%s' корректно завершила работу за %s секунд", VM_NAME, waited)
+
+        # Убедимся, что VM остановлена
         while dom.isActive():
             time.sleep(CHECK_INTERVAL)
-        logger.debug("VM '%s' остановлена", dom.name())
+        logger.debug("VM '%s' остановлена", VM_NAME)
 
         # Откатываем оба ZFS-тома к clean
         for snap in ZFS_SNAPSHOTS:
-            logger.debug("Откат ZFS к %s", snap)
-            # потребует sudo-пароль или запуск скрипта под рута
+            logger.debug("Откат ZFS-тома к снимку %s", snap)
             subprocess.run(
                 ["sudo", "zfs", "rollback", "-r", snap],
                 check=True
@@ -81,8 +94,9 @@ def reset_vm(dom):
         dom.create()
 
         logger.info("VM '%s' запущена в clean-состоянии", VM_NAME)
+
     except Exception as e:
-        logger.error("Ошибка при откате: %s", e)
+        logger.error("Ошибка при сбросе VM '%s': %s", VM_NAME, e)
 
 def is_process_running(dom, process_name):
     """Проверяем, запущен ли процесс внутри Windows-гостя через qemu-guest-agent"""
