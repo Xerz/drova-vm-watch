@@ -34,8 +34,18 @@ def get_state():
     try:
         r = requests.get(ENDPOINT, headers=HEADERS, timeout=5)
         r.raise_for_status()
-        data = r.json().get("sessions")[0]
-        return data.get("status") if data.get("server_id") == SERVER_UUID else BaseException("Server UUID does not match, check your Token-Server pair")
+        sessions = r.json().get("sessions", [])
+        if not sessions:
+            raise ValueError("No sessions returned from server")
+
+        data = sessions[0]
+        server_id = data.get("server_id")
+        if server_id != SERVER_UUID:
+            logger.error("Server ID mismatch")
+            logger.error(server_id)
+            raise RuntimeError("Server UUID does not match, check your Token-Server pair")
+
+        return data.get("status")
     except Exception as e:
         logger.error(f"Ошибка запроса: {e}")
         return None
