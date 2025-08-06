@@ -43,6 +43,7 @@ def get_state():
         if server_id != SERVER_UUID:
             logger.error("Server ID mismatch")
             logger.error(server_id)
+            logger.error(SERVER_UUID)
             raise RuntimeError("Server UUID does not match, check your Token-Server pair")
 
         return data.get("status")
