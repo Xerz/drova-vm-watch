@@ -27,15 +27,15 @@ ZFS_SNAPSHOTS = [
 ]
 
 
-ENDPOINT = f"https://services.drova.io/server-manager/servers/{SERVER_UUID}?user_id={USER_ID}"
+ENDPOINT = f"https://services.drova.io/session-manager/sessions"
 HEADERS = {"X-Auth-Token": AUTH_TOKEN}
 
 def get_state():
     try:
         r = requests.get(ENDPOINT, headers=HEADERS, timeout=5)
         r.raise_for_status()
-        data = r.json()
-        return data.get("state")
+        data = r.json()[0]
+        return data.get("status") if data.get("server_id") == SERVER_UUID else BaseException("Server UUID does not match, check your Token-Server pair")
     except Exception as e:
         logger.error(f"Ошибка запроса: {e}")
         return None
@@ -126,32 +126,32 @@ def main():
         waiting_msg_printed = False
         while True:
             state = get_state()
-            if state in ("BUSY", "HANDSHAKE"):
+            if state in ("ACTIVE", "HANDSHAKE"):
                 logger.info(f"VM {VM_NAME} entered session state: {state}")
                 break
             if not waiting_msg_printed:
-                logger.info(f"Waiting for BUSY/HANDSHAKE (current: {state})")
+                logger.info(f"Waiting for ACTIVE/HANDSHAKE (last session state: {state})")
                 waiting_msg_printed = True
             else:
                 logger.debug(f"Still waiting (state={state})")
             time.sleep(SLEEP_TIME)
 
-        # Ждем LISTEN
+        # Ждем не "ACTIVE", "HANDSHAKE"
         waiting_msg_printed = False
         while True:
             state = get_state()
-            if state == "LISTEN":
-                logger.info(f"State changed to LISTEN → rebooting {VM_NAME}")
+            if not state in ("ACTIVE", "HANDSHAKE"):
+                logger.info(f"State changed to {state} → reverting {VM_NAME}")
                 try:
                     reset_vm(dom)
                 except libvirt.libvirtError as e:
                     logger.error(f"Ошибка при перезагрузке: {e}")
                 break
             if not waiting_msg_printed:
-                logger.info(f"Waiting for LISTEN (current: {state})")
+                logger.info(f"Waiting for not state in (ACTIVE, HANDSHAKE) (current: {state})")
                 waiting_msg_printed = True
             else:
-                logger.debug(f"Still not LISTEN (state={state})")
+                logger.debug(f"Still ACTIVE, HANDSHAKE (state={state})")
             time.sleep(SLEEP_TIME)
 
 
