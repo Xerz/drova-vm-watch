@@ -24,7 +24,7 @@ ZFS_SNAPSHOTS = [
     f"tank/{VM_NAME}@clean",
     f"tank/{VM_NAME}-storage@clean"
 ]
-GRACE_PERIOD = os.getenv("GRACE_PERIOD", "60") # время, которое даётся ВМ для мягкого выключения
+GRACE_PERIOD = int(os.getenv("GRACE_PERIOD", "60")) # время, которое даётся ВМ для мягкого выключения
 CHECK_INTERVAL = 2  # секунды между проверками статуса ВМ при выключении
 
 
