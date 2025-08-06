@@ -27,15 +27,14 @@ ZFS_SNAPSHOTS = [
 ]
 
 
-ENDPOINT = f"https://services.drova.io/session-manager/sessions"
+ENDPOINT = "https://services.drova.io/session-manager/sessions"
 HEADERS = {"X-Auth-Token": AUTH_TOKEN}
 
 def get_state():
     try:
         r = requests.get(ENDPOINT, headers=HEADERS, timeout=5)
         r.raise_for_status()
-        data = r.json()[0]
-        print(json.dumps(data, indent=4))
+        data = r.json().get("sessions")[0]
         return data.get("status") if data.get("server_id") == SERVER_UUID else BaseException("Server UUID does not match, check your Token-Server pair")
     except Exception as e:
         logger.error(f"Ошибка запроса: {e}")
