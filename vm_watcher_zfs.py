@@ -41,9 +41,6 @@ def get_state():
         data = sessions[0]
         server_id = data.get("server_id")
         if server_id != SERVER_UUID:
-            logger.error("Server ID mismatch")
-            logger.error(server_id)
-            logger.error(SERVER_UUID)
             raise RuntimeError("Server UUID does not match, check your Token-Server pair")
 
         return data.get("status")
@@ -151,7 +148,7 @@ def main():
         waiting_msg_printed = False
         while True:
             state = get_state()
-            if not state in ("ACTIVE", "HANDSHAKE"):
+            if state and not state in ("ACTIVE", "HANDSHAKE"):
                 logger.info(f"State changed to {state} → reverting {VM_NAME}")
                 try:
                     reset_vm(dom)
