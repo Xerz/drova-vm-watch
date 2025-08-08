@@ -58,28 +58,32 @@ logger = logging.getLogger(__name__)
 
 def reset_vm(dom):
     try:
-        logger.info(f"Попытка корректного завершения работы VM '{VM_NAME}'")
-        logger.debug("Запрашиваем graceful shutdown для VM '%s'", VM_NAME)
-        dom.shutdown()
-
-        # Ожидаем graceful shutdown до GRACE_PERIOD секунд
-        waited = 0
-        while dom.isActive() and waited < GRACE_PERIOD:
-            time.sleep(CHECK_INTERVAL)
-            waited += CHECK_INTERVAL
+        # Сначала проверяем, активна ли ВМ
         if dom.isActive():
-            logger.warning(
-                "VM '%s' не завершила работу за %s секунд, выполняем принудительное отключение",
-                VM_NAME, GRACE_PERIOD
-            )
-            dom.destroy()
-        else:
-            logger.info("VM '%s' корректно завершила работу за %s секунд", VM_NAME, waited)
+            logger.info(f"Попытка корректного завершения работы VM '{VM_NAME}'")
+            dom.shutdown()
 
-        # Убедимся, что VM остановлена
-        while dom.isActive():
-            time.sleep(CHECK_INTERVAL)
-        logger.debug("VM '%s' остановлена", VM_NAME)
+            # Ожидаем graceful shutdown до GRACE_PERIOD секунд
+            waited = 0
+            while dom.isActive() and waited < GRACE_PERIOD:
+                time.sleep(CHECK_INTERVAL)
+                waited += CHECK_INTERVAL
+
+            if dom.isActive():
+                logger.warning(
+                    "VM '%s' не завершила работу за %s секунд, выполняем принудительное отключение",
+                    VM_NAME, GRACE_PERIOD
+                )
+                dom.destroy()
+            else:
+                logger.info("VM '%s' корректно завершила работу за %s секунд", VM_NAME, waited)
+
+            # Дожидаемся окончательной остановки
+            while dom.isActive():
+                time.sleep(CHECK_INTERVAL)
+            logger.debug("VM '%s' остановлена", VM_NAME)
+        else:
+            logger.info("VM '%s' уже остановлена — пропускаем shutdown/destroy", VM_NAME)
 
         # Откатываем оба ZFS-тома к clean
         for snap in ZFS_SNAPSHOTS:
@@ -95,6 +99,9 @@ def reset_vm(dom):
 
         logger.info("VM '%s' запущена в clean-состоянии", VM_NAME)
 
+    except libvirt.libvirtError as e:
+        # Специально ловим ошибки libvirt
+        logger.error("Libvirt error при сбросе VM '%s': %s", VM_NAME, e)
     except Exception as e:
         logger.error("Ошибка при сбросе VM '%s': %s", VM_NAME, e)
 
