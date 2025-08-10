@@ -12,6 +12,7 @@ VM2="win11-2"
 HYP_CMD="virsh"         # virsh | qm | none
 DRY_RUN=0
 KEEP_OLD_BASE="yes"     # yes | no
+VIRSH="virsh -c qemu:///system"
 
 
 print_usage(){
@@ -51,19 +52,19 @@ isvol(){ [[ "$(zfs get -H -o value volsize "$1" 2>/dev/null || echo "-")" != "-"
 stop_vm(){
   case "$HYP_CMD" in
     virsh)
-      run "virsh shutdown '$1' || true"
+      run "$VIRSH shutdown '$1' || true"
       for i in {1..30}; do
-        [[ "$(virsh domstate "$1" 2>/dev/null)" == "shut off" ]] && return
+        [[ "$($VIRSH domstate "$1" 2>/dev/null)" == "shut off" ]] && return
         sleep 2
       done
-      run "virsh destroy '$1' || true" ;;
+      run "$VIRSH destroy '$1' || true" ;;
     qm) run "qm shutdown '$1' --forceStop 1 >/dev/null 2>&1 || true";;
     none) :;;
   esac
 }
 start_vm(){
   case "$HYP_CMD" in
-    virsh) run "virsh start '$1' || true";;
+    virsh) run "$VIRSH start '$1' || true";;
     qm)    run "qm start '$1' || true";;
     none)  :;;
   esac
@@ -82,7 +83,7 @@ fi
 
 # --- проверки
 command -v zfs >/dev/null 2>&1 || die "zfs не найден"
-case "$HYP_CMD" in virsh) command -v virsh >/dev/null || die "virsh не найден";;
+case "$HYP_CMD" in virsh) command -v $VIRSH list --all >/dev/null || die "virsh connection failed";;
                     qm)   command -v qm    >/dev/null || die "qm не найден";;
                     none) :;; *) die "--hyp должен быть virsh|qm|none";; esac
 exists "$BASE_DS"   || die "$BASE_DS не найден"
