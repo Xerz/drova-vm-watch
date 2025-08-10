@@ -49,24 +49,64 @@ die(){ log "Ошибка: $*"; exit 1; }
 run(){ (( DRY_RUN )) && printf 'DRY-RUN: %s\n' "$*" || eval "$@"; }
 exists(){ zfs list -H "$1" >/dev/null 2>&1; }
 isvol(){ [[ "$(zfs get -H -o value volsize "$1" 2>/dev/null || echo "-")" != "-" ]]; }
+# Универсальный раннер без eval
+run() {
+  if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+    printf 'DRY-RUN: %q ' $VIRSH "$@"; echo
+    return 0
+  else
+    # shellcheck disable=SC2086
+    $VIRSH "$@"
+  fi
+}
+
 stop_vm(){
   case "$HYP_CMD" in
     virsh)
-      run "$VIRSH shutdown '$1' || true"
+      run shutdown "$1" || true
       for i in {1..30}; do
-        [[ "$($VIRSH domstate "$1" 2>/dev/null)" == "shut off" ]] && return
+        state="$( $VIRSH domstate "$1" 2>/dev/null || true )"
+        [[ "$state" == "shut off" ]] && return 0
         sleep 2
       done
-      run "$VIRSH destroy '$1' || true" ;;
-    qm) run "qm shutdown '$1' --forceStop 1 >/dev/null 2>&1 || true";;
+      # Последнее средство — жёсткая остановка
+      run destroy "$1" || true
+      ;;
+    qm)
+      # Мягкая попытка
+      if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+        echo "DRY-RUN: qm shutdown '$1' --forceStop 1"
+      else
+        qm shutdown "$1" --forceStop 1 >/dev/null 2>&1 || true
+      fi
+      # Подождём до 60 сек как у virsh
+      for i in {1..30}; do
+        st="$(qm status "$1" 2>/dev/null || true)"
+        [[ "$st" == *stopped* ]] && return 0
+        sleep 2
+      done
+      # Жёсткая остановка как крайний случай
+      if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+        echo "DRY-RUN: qm stop '$1'"
+      else
+        qm stop "$1" >/dev/null 2>&1 || true
+      fi
+      ;;
     none) :;;
   esac
 }
+
 start_vm(){
   case "$HYP_CMD" in
-    virsh) run "$VIRSH start '$1' || true";;
-    qm)    run "qm start '$1' || true";;
-    none)  :;;
+    virsh) run start "$1" || true;;
+    qm)
+      if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+        echo "DRY-RUN: qm start '$1'"
+      else
+        qm start "$1" >/dev/null 2>&1 || true
+      fi
+      ;;
+    none) :;;
   esac
 }
 
