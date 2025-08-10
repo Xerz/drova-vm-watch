@@ -96,6 +96,7 @@ run_virsh() {
 
 exists_ds(){ zfs list -H "$1" >/dev/null 2>&1; }
 is_zvol(){ [[ "$(zfs get -H -o value volsize "$1" 2>/dev/null || echo "-")" != "-" ]]; }
+exists_snap(){ zfs list -H -t snapshot "$1@$2" >/dev/null 2>&1; }
 
 # --- функции управления ВМ ---
 stop_vm(){
