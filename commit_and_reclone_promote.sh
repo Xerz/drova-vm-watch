@@ -88,7 +88,11 @@ exists "$BASE_DS"   || die "$BASE_DS не найден"
 exists "$SRC_CLONE" || die "$SRC_CLONE не найден"
 isvol "$BASE_DS"    || die "$BASE_DS не zvol"
 isvol "$SRC_CLONE"  || die "$SRC_CLONE не zvol"
-(( KEEP_OLD_BASE == "yes" || KEEP_OLD_BASE == "no" )) || die "--keep-old-base должен быть yes или no"
+if [[ "$KEEP_OLD_BASE" == "yes" || "$KEEP_OLD_BASE" == "no" ]]; then
+  :
+else
+  die "--keep-old-base должен быть 'yes' или 'no'"
+fi
 
 # === 1. выключение ВМ
 log "[1] Останавливаю ВМ $VM1 и $VM2..."
