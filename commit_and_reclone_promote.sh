@@ -73,12 +73,16 @@ done
 log(){ printf '%s\n' "$*" >&2; }
 die(){ log "Ошибка: $*"; exit 1; }
 
-# общий раннер для любых команд (zfs, rm, etc.) — без eval
+# лог для stderr zfs-команд (можно переопределить переменной окружения ERRLOG)
+TS="${TS:-$(date +%Y%m%d-%H%M%S)}"
+ERRLOG="${ERRLOG:-/var/tmp/zfs-commit-errors.$TS.log}"
+
+# общий раннер для любых команд (zfs, rm, etc.) — без eval; stderr дублируем в лог
 run_cmd() {
   if [[ ${DRY_RUN:-0} -eq 1 ]]; then
     printf 'DRY-RUN:'; for a in "$@"; do printf ' %q' "$a"; done; echo
   else
-    "$@"
+    "$@" 2> >(tee -a "$ERRLOG" >&2)
   fi
 }
 
@@ -161,7 +165,6 @@ command -v zfs   >/dev/null 2>&1 || die "zfs не найден"
 case "$HYP_CMD" in
   virsh)
     command -v virsh >/dev/null 2>&1 || die "virsh не найден"
-    # проверим подключение к qemu:///system
     $VIRSH list --all >/dev/null 2>&1 || die "virsh connection failed (qemu:///system)"
     ;;
   qm)   command -v qm >/dev/null 2>&1 || die "qm не найден";;
@@ -182,24 +185,25 @@ fi
 log "[1] Останавливаю ВМ $VM1 и $VM2..."
 [[ "$HYP_CMD" != "none" ]] && { stop_vm "$VM1"; stop_vm "$VM2"; }
 
-TS="$(date +%Y%m%d-%H%M%S)"
-OLD_BASE="${BASE_DS}-old-${TS}"
+TS_NOW="$(date +%Y%m%d-%H%M%S)"
+OLD_BASE="${BASE_DS}-old-${TS_NOW}"
 
 # === 2. promote + rename ===
 log "[2] zfs promote ${SRC_CLONE} ..."
+# Устраняем коллизию снапшотов на клоне, если есть
 if exists_snap "$BASE_DS" "$SNAP_NAME" && exists_snap "$SRC_CLONE" "$SNAP_NAME"; then
   case "$CONFLICT_ACTION" in
     rename)
-      log "[2a] Найдена коллизия снапшота @${SNAP_NAME}. Переименую на клоне: ${SRC_CLONE}@${SNAP_NAME} -> ${SRC_CLONE}@${SNAP_NAME}-prepromote-${TS}"
-      run_cmd zfs rename "${SRC_CLONE}@${SNAP_NAME}" "${SRC_CLONE}@${SNAP_NAME}-prepromote-${TS}"
+      log "[2a] Коллизия @${SNAP_NAME}. Переименую на клоне: ${SRC_CLONE}@${SNAP_NAME} -> ${SRC_CLONE}@${SNAP_NAME}-prepromote-${TS_NOW}"
+      run_cmd zfs rename "${SRC_CLONE}@${SNAP_NAME}" "${SRC_CLONE}@${SNAP_NAME}-prepromote-${TS_NOW}"
       ;;
     destroy)
-      log "[2a] Найдена коллизия снапшота @${SNAP_NAME}. Удаляю снапшот на клоне: ${SRC_CLONE}@${SNAP_NAME}"
+      log "[2a] Коллизия @${SNAP_NAME}. Удаляю снапшот на клоне: ${SRC_CLONE}@${SNAP_NAME}"
       run_cmd zfs destroy -f "${SRC_CLONE}@${SNAP_NAME}"
       ;;
   esac
 fi
-run_cmd zfs promote "$SRC_CLONE"
+run_cmd zfs promote "$SRC_CLONE"   # при конфликте имён снапшотов ZFS требует переименовать/удалить конфликтующие. :contentReference[oaicite:1]{index=1}
 
 log "[3] Переименование: ${BASE_DS} -> ${OLD_BASE}; ${SRC_CLONE} -> ${BASE_DS}"
 run_cmd zfs rename "$BASE_DS" "$OLD_BASE"
@@ -207,13 +211,14 @@ run_cmd zfs rename "$SRC_CLONE" "$BASE_DS"
 
 # === 3. пересоздаём эталонный снапшот ===
 log "[4] Снэп: ${BASE_DS}@${SNAP_NAME}"
-run_cmd zfs destroy -f -R "${BASE_DS}@${SNAP_NAME}" >/dev/null 2>&1 || true
+# Больше НЕ глушим stderr — ошибки будут видны и попадут в $ERRLOG
+run_cmd zfs destroy -f -R "${BASE_DS}@${SNAP_NAME}" || true
 run_cmd zfs snapshot "${BASE_DS}@${SNAP_NAME}"
 
 # === 4. пересоздаём клоны от base@snap ===
 log "[5a] Клоны: ${CLONE1}, ${CLONE2}"
-run_cmd zfs destroy -f "$CLONE1" >/dev/null 2>&1 || true
-run_cmd zfs destroy -f "$CLONE2" >/dev/null 2>&1 || true
+run_cmd zfs destroy -f "$CLONE1" || true
+run_cmd zfs destroy -f "$CLONE2" || true
 run_cmd zfs clone "${BASE_DS}@${SNAP_NAME}" "$CLONE1"
 run_cmd zfs clone "${BASE_DS}@${SNAP_NAME}" "$CLONE2"
 
@@ -234,4 +239,4 @@ fi
 log "[7] Запускаю ВМ..."
 [[ "$HYP_CMD" != "none" ]] && { start_vm "$VM1"; start_vm "$VM2"; }
 
-log "Готово."
+log "Готово. Лог ошибок (если были): $ERRLOG"
