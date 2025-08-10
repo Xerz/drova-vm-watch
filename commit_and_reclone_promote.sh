@@ -207,7 +207,7 @@ run_cmd zfs rename "$SRC_CLONE" "$BASE_DS"
 
 # === 3. пересоздаём эталонный снапшот ===
 log "[4] Снэп: ${BASE_DS}@${SNAP_NAME}"
-run_cmd zfs destroy -f "${BASE_DS}@${SNAP_NAME}" >/dev/null 2>&1 || true
+run_cmd zfs destroy -f -R "${BASE_DS}@${SNAP_NAME}" >/dev/null 2>&1 || true
 run_cmd zfs snapshot "${BASE_DS}@${SNAP_NAME}"
 
 # === 4. пересоздаём клоны от base@snap ===
