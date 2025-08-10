@@ -14,6 +14,7 @@ HYP_CMD="virsh"          # virsh | qm | none
 
 DRY_RUN=0
 KEEP_OLD_BASE="yes"      # yes | no
+CONFLICT_ACTION="destroy"
 
 # Явный URI важен, чтобы не попасть в qemu:///session
 VIRSH="virsh -c qemu:///system"
@@ -61,6 +62,7 @@ while (( $# )); do
     --vm2)        VM2="$2"; shift 2;;
     --hyp)        HYP_CMD="$2"; shift 2;;
     --keep-old-base) KEEP_OLD_BASE="$2"; shift 2;;
+    --conflict-action) CONFLICT_ACTION="$2"; shift 2;;
     --dry-run)    DRY_RUN=1; shift;;
     -h|--help)    print_usage; exit 0;;
     *) echo "Неизвестный аргумент: $1"; print_usage; exit 1;;
@@ -184,6 +186,18 @@ OLD_BASE="${BASE_DS}-old-${TS}"
 
 # === 2. promote + rename ===
 log "[2] zfs promote ${SRC_CLONE} ..."
+if exists_snap "$BASE_DS" "$SNAP_NAME" && exists_snap "$SRC_CLONE" "$SNAP_NAME"; then
+  case "$CONFLICT_ACTION" in
+    rename)
+      log "[2a] Найдена коллизия снапшота @${SNAP_NAME}. Переименую на клоне: ${SRC_CLONE}@${SNAP_NAME} -> ${SRC_CLONE}@${SNAP_NAME}-prepromote-${TS}"
+      run_cmd zfs rename "${SRC_CLONE}@${SNAP_NAME}" "${SRC_CLONE}@${SNAP_NAME}-prepromote-${TS}"
+      ;;
+    destroy)
+      log "[2a] Найдена коллизия снапшота @${SNAP_NAME}. Удаляю снапшот на клоне: ${SRC_CLONE}@${SNAP_NAME}"
+      run_cmd zfs destroy -f "${SRC_CLONE}@${SNAP_NAME}"
+      ;;
+  esac
+fi
 run_cmd zfs promote "$SRC_CLONE"
 
 log "[3] Переименование: ${BASE_DS} -> ${OLD_BASE}; ${SRC_CLONE} -> ${BASE_DS}"
