@@ -51,20 +51,20 @@ isvol(){ [[ "$(zfs get -H -o value volsize "$1" 2>/dev/null || echo "-")" != "-"
 stop_vm(){
   case "$HYP_CMD" in
     virsh)
-      run "virsh shutdown '$1' >/dev/null 2>&1 || true"
+      run "virsh shutdown '$1' || true"
       for i in {1..30}; do
         [[ "$(virsh domstate "$1" 2>/dev/null)" == "shut off" ]] && return
         sleep 2
       done
-      run "virsh destroy '$1' >/dev/null 2>&1 || true" ;;
+      run "virsh destroy '$1' || true" ;;
     qm) run "qm shutdown '$1' --forceStop 1 >/dev/null 2>&1 || true";;
     none) :;;
   esac
 }
 start_vm(){
   case "$HYP_CMD" in
-    virsh) run "virsh start '$1' >/dev/null 2>&1 || true";;
-    qm)    run "qm start '$1' >/dev/null 2>&1 || true";;
+    virsh) run "virsh start '$1' || true";;
+    qm)    run "qm start '$1' || true";;
     none)  :;;
   esac
 }
