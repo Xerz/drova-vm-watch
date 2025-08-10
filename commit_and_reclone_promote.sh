@@ -13,6 +13,7 @@ HYP_CMD="virsh"         # virsh | qm | none
 DRY_RUN=0
 KEEP_OLD_BASE="yes"     # yes | no
 
+
 print_usage(){
   cat <<'H'
 commit_and_reclone_promote.sh [options]
