@@ -217,8 +217,8 @@ run_cmd zfs snapshot "${BASE_DS}@${SNAP_NAME}"
 
 # === 4. пересоздаём клоны от base@snap ===
 log "[5a] Клоны: ${CLONE1}, ${CLONE2}"
-run_cmd zfs destroy -f "$CLONE1" || true
-run_cmd zfs destroy -f "$CLONE2" || true
+#run_cmd zfs destroy -f "$CLONE1" || true
+#run_cmd zfs destroy -f "$CLONE2" || true
 run_cmd zfs clone "${BASE_DS}@${SNAP_NAME}" "$CLONE1"
 run_cmd zfs clone "${BASE_DS}@${SNAP_NAME}" "$CLONE2"
 
