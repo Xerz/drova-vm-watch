@@ -31,6 +31,8 @@ CHECK_INTERVAL = 2  # секунды между проверками стату�
 ENDPOINT = "https://services.drova.io/session-manager/sessions"
 HEADERS = {"X-Auth-Token": AUTH_TOKEN}
 
+ACTIVE_SESSION_STATUSES = ("ACTIVE", "HANDSHAKE", "NEW")  # Статусы активной сессии
+
 def get_state():
     try:
         r = requests.get(ENDPOINT, headers=HEADERS, timeout=5)
@@ -149,27 +151,27 @@ def main():
 
     in_session = False
 
-
+    # Статусы активной сессии: ACTIVE_SESSION_STATUSES
     while True:
-        # Ждем BUSY или HANDSHAKE
+        # Ждем любой из статусов активной сессии
         waiting_msg_printed = False
         while True:
             state = get_state()
-            if state in ("ACTIVE", "HANDSHAKE"):
+            if state in ACTIVE_SESSION_STATUSES:
                 logger.info(f"VM {VM_NAME} entered session state: {state}")
                 break
             if not waiting_msg_printed:
-                logger.info(f"Waiting for ACTIVE/HANDSHAKE (last session state: {state})")
+                logger.info(f"Waiting for {ACTIVE_SESSION_STATUSES} (last session state: {state})")
                 waiting_msg_printed = True
             else:
                 logger.debug(f"Still waiting (state={state})")
             time.sleep(SLEEP_TIME)
 
-        # Ждем не "ACTIVE", "HANDSHAKE"
+        # Ждем, когда статус станет неактивным
         waiting_msg_printed = False
         while True:
             state = get_state()
-            if state and not state in ("ACTIVE", "HANDSHAKE"):
+            if state and state not in ACTIVE_SESSION_STATUSES:
                 logger.info(f"State changed to {state} → reverting {VM_NAME}")
                 try:
                     reset_vm(dom)
@@ -177,10 +179,10 @@ def main():
                     logger.error(f"Ошибка при перезагрузке: {e}")
                 break
             if not waiting_msg_printed:
-                logger.info(f"Waiting for not state in (ACTIVE, HANDSHAKE) (current: {state})")
+                logger.info(f"Waiting for not in {ACTIVE_SESSION_STATUSES} (current: {state})")
                 waiting_msg_printed = True
             else:
-                logger.debug(f"Still ACTIVE, HANDSHAKE (state={state})")
+                logger.debug(f"Still in {ACTIVE_SESSION_STATUSES} (state={state})")
             time.sleep(SLEEP_TIME)
 
 
