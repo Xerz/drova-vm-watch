@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from dotenv import load_dotenv
+import obsws_python as obs
 
 # Загружаем переменные из .env
 load_dotenv()
@@ -27,11 +28,21 @@ ZFS_SNAPSHOTS = [
 GRACE_PERIOD = int(os.getenv("GRACE_PERIOD", "60")) # время, которое даётся ВМ для мягкого выключения
 CHECK_INTERVAL = 2  # секунды между проверками статуса ВМ при выключении
 
+OBS_WS_HOST = os.getenv("OBS_WS_HOST", "localhost")
+OBS_WS_PORT = int(os.getenv("OBS_WS_PORT", "4444"))
+OBS_WS_PASSWORD = os.getenv("OBS_WS_PASSWORD", "")
 
 ENDPOINT = "https://services.drova.io/session-manager/sessions"
 HEADERS = {"X-Auth-Token": AUTH_TOKEN}
 
 ACTIVE_SESSION_STATUSES = ("ACTIVE", "HANDSHAKE", "NEW")  # Статусы активной сессии
+
+# Настройка логгера
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 def get_state():
     try:
@@ -50,13 +61,6 @@ def get_state():
     except Exception as e:
         logger.error(f"Ошибка запроса: {e}")
         return None
-
-# Настройка логгера
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-logger = logging.getLogger(__name__)
 
 def reset_vm(dom):
     try:
@@ -107,35 +111,21 @@ def reset_vm(dom):
     except Exception as e:
         logger.error("Ошибка при сбросе VM '%s': %s", VM_NAME, e)
 
-def is_process_running(dom, process_name):
-    """Проверяем, запущен ли процесс внутри Windows-гостя через qemu-guest-agent"""
-    try:
-        # запускаем tasklist внутри гостя
-        cmd = {
-            "execute": "guest-exec",
-            "arguments": {
-                "path": "cmd.exe",
-                "arg": ["/c", "tasklist"],
-                "capture-output": True,
-            },
-        }
-        result = dom.qemuAgentCommand(json.dumps(cmd), libvirt.VIR_DOMAIN_QEMU_AGENT_COMMAND_DEFAULT, 0)
-        pid = json.loads(result)["return"]["pid"]
+def start_record(client: obs.ReqClient):
+    client.start_record()  # StartRecord (v5). :contentReference[oaicite:13]{index=13}
+    st = client.get_record_status()
+    logger.info(f"Recording: {st.output_active}")
 
-        # ждём завершения команды
-        while True:
-            status_cmd = {"execute": "guest-exec-status", "arguments": {"pid": pid}}
-            status_result = libvirt.virDomainQemuAgentCommand(dom, json.dumps(status_cmd), libvirt.VIR_DOMAIN_QEMU_AGENT_COMMAND_DEFAULT, 0)
-            status = json.loads(status_result)["return"]
-            if status["exited"]:
-                output = status.get("out-data", "")
-                logger.debug(output)
-                return process_name.lower() in output.lower()
-            time.sleep(1)
-    except Exception as e:
-        logger.error(f"Ошибка при проверке процесса: {e}")
-        return False
-
+def stop_record_and_wait(client: obs.ReqClient):
+    # StopRecord вернёт путь (в 5.x), но подождём гарантированно. :contentReference[oaicite:14]{index=14}
+    res = client.stop_record()
+    out_path = getattr(res, "output_path", None)
+    for _ in range(120):
+        st = client.get_record_status()     # GetRecordStatus. :contentReference[oaicite:15]{index=15}
+        if not st.output_active:
+            return out_path
+        time.sleep(0.5)
+    return out_path
 
 def main():
     conn = libvirt.open("qemu:///system")
@@ -149,6 +139,13 @@ def main():
         logger.error(f"Виртуальная машина {VM_NAME} не найдена")
         return
 
+    try:
+        obs_client = obs.ReqClient(host=OBS_WS_HOST, port=OBS_WS_PORT, password=OBS_WS_PASSWORD)
+        obs_client.get_version()
+    except Exception as e:
+        logger.error(f"Не удалось подключиться к OBS WebSocket: {e}")
+        return
+
     in_session = False
 
     # Статусы активной сессии: ACTIVE_SESSION_STATUSES
@@ -159,6 +156,10 @@ def main():
             state = get_state()
             if state in ACTIVE_SESSION_STATUSES:
                 logger.info(f"VM {VM_NAME} entered session state: {state}")
+                try:
+                    start_record(obs_client)
+                except Exception as e:
+                    logger.error(f"Ошибка при запуске записи в OBS: {e}")
                 break
             if not waiting_msg_printed:
                 logger.info(f"Waiting for {ACTIVE_SESSION_STATUSES} (last session state: {state})")
@@ -166,6 +167,7 @@ def main():
             else:
                 logger.debug(f"Still waiting (state={state})")
             time.sleep(SLEEP_TIME)
+
 
         # Ждем, когда статус станет неактивным
         waiting_msg_printed = False
@@ -177,6 +179,10 @@ def main():
                     reset_vm(dom)
                 except libvirt.libvirtError as e:
                     logger.error(f"Ошибка при перезагрузке: {e}")
+                try:
+                    stop_record_and_wait(obs_client)
+                except Exception as e:
+                    logger.error(f"Ошибка при остановке записи в OBS: {e}")
                 break
             if not waiting_msg_printed:
                 logger.info(f"Waiting for not in {ACTIVE_SESSION_STATUSES} (current: {state})")
