@@ -46,11 +46,13 @@ logger = logging.getLogger(__name__)
 
 def get_state():
     try:
-        r = requests.get(ENDPOINT, headers=HEADERS, timeout=5)
+        params = [("status", status) for status in ACTIVE_SESSION_STATUSES]
+        r = requests.get(ENDPOINT, params=params, headers=HEADERS, timeout=5)
         r.raise_for_status()
         sessions = r.json().get("sessions", [])
         if not sessions:
-            raise ValueError("No sessions returned from server")
+            # No active sessions returned from server, return "Inactive"
+            return "INACTIVE"
 
         data = sessions[0]
         server_id = data.get("server_id")
