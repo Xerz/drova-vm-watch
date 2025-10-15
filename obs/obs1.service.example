@@ -1,0 +1,12 @@
+[Unit]
+Description=OBS First instance
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/obs --multi --profile "YT-1" --collection "win1" --websocket_port "4451" --websocket_password "xxx" --minimize-to-tray
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target
