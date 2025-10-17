@@ -1,4 +1,4 @@
-// content.js — Drova sessions → Tabulator 6.3.1 (cdnjs) с диагностикой и fallback'ом в нативную таблицу
+// content.js — Tabulator (cdnjs 6.3.1) + server/product names + *_human + Human-only toggle
 (() => {
   const inject = (fn) => {
     const s = document.createElement('script');
@@ -12,7 +12,9 @@
 
     // ---- CONFIG ----
     const TITLE_TEXT = /Играли на ваших станциях/i;
-    const API_RE = /\/session-manager\/sessions(?:\?|$)/i;
+    const SESSIONS_RE = /\/session-manager\/sessions(?:\?|$)/i;
+    const NAMES_RE    = /\/server-manager\/servers\/server_names(?:\?|$)/i;
+    const PRODUCTS_RE = /\/product-manager\/product\/listfull2(?:\?|$)/i;
     const HIDDEN_ATTR = 'data-ds-hidden-original';
 
     const CDNJS = {
@@ -21,13 +23,24 @@
       name: 'cdnjs@6.3.1'
     };
 
+    // Какие столбцы показывать в «human-only» режиме
+    const HUMAN_COLUMNS = [
+      'server_name','product_name',
+      'created_on_human','finished_on_human','duration_human',
+      'creator_ip','billing_type',
+      'score','score_reason','score_text'
+    ];
+
     // ---- STATE ----
-    let lastSessions = null;
+    let rawSessions = null;
+    let serverNames = {};
+    let productsById = {};
     let lastSig = '';
     let renderTimer = null;
     let MUTATE_LOCK = 0;
-    let tableInstance = null;     // Tabulator instance (если загружен)
+    let tableInstance = null;
     let hiddenNodesCache = [];
+    let humanOnly = false; // <— режим показа
 
     // ---- STATUS PILL ----
     const pill = document.createElement('div');
@@ -52,6 +65,27 @@
     // ---- HELPERS ----
     function withLock(fn) { MUTATE_LOCK++; try { return fn(); } finally { MUTATE_LOCK--; } }
 
+    function tsToHuman(ts) {
+      if (ts == null) return '';
+      const d = new Date(Number(ts));
+      if (isNaN(d.getTime())) return '';
+      const Y = d.getFullYear();
+      const M = String(d.getMonth()+1).padStart(2,'0');
+      const D = String(d.getDate()).padStart(2,'0');
+      const h = String(d.getHours()).padStart(2,'0');
+      const m = String(d.getMinutes()).padStart(2,'0');
+      const s = String(d.getSeconds()).padStart(2,'0');
+      return `${Y}-${M}-${D} ${h}:${m}:${s}`;
+    }
+    function msToHumanDuration(ms) {
+      if (!(ms > 0)) return '';
+      let sec = Math.floor(ms / 1000);
+      const h = Math.floor(sec / 3600); sec -= h*3600;
+      const m = Math.floor(sec / 60);   const s = sec - m*60;
+      return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+                   : `${m}:${String(s).padStart(2,'0')}`;
+    }
+
     function findSectionHeaderRow(root=document) {
       const headings = Array.from(root.querySelectorAll('h2,h3,h4'));
       const h = headings.find(el => TITLE_TEXT.test(el.textContent || ''));
@@ -74,7 +108,6 @@
       });
       return wrap;
     }
-
     function hideOriginalAfter(headerRow) {
       if (!headerRow) return;
       let node = headerRow.nextElementSibling;
@@ -108,51 +141,105 @@
         s.onload = res; s.onerror = rej; document.head.appendChild(s);
       });
     }
-
-    // Диагностическая загрузка Tabulator с cdnjs
-    async function ensureTabulatorCDNJS(setStatus) {
+    async function ensureTabulator() {
       if (window.Tabulator) return { ok: true, where: 'present' };
       try {
-        setStatus?.(`load ${CDNJS.name}: css`);
-        await loadCSS(CDNJS.css);
-      } catch (e) {
-        return { ok: false, reason: `CSS blocked: ${e?.message||e}` };
-      }
-      try {
-        setStatus?.(`load ${CDNJS.name}: js`);
-        await loadJS(CDNJS.js);
-      } catch (e) {
-        return { ok: false, reason: `JS blocked: ${e?.message||e}` };
-      }
-      if (window.Tabulator) return { ok: true, where: CDNJS.name };
-      return { ok: false, reason: 'loaded but window.Tabulator missing' };
+        setPill(`load ${CDNJS.name}: css`); await loadCSS(CDNJS.css);
+        setPill(`load ${CDNJS.name}: js`);  await loadJS(CDNJS.js);
+      } catch (e) { return { ok:false, reason:e?.message||'load error' }; }
+      return window.Tabulator ? { ok:true, where:CDNJS.name } : { ok:false, reason:'no window.Tabulator' };
     }
 
-    function collectColumns(rows) {
+    // Список всех возможных колонок (кроме merchant_id); порядок «разумный»
+    function getAllColumns(rows) {
       const set = new Set();
       rows.forEach(r => Object.keys(r || {}).forEach(k => set.add(k)));
-      const preferred = ['uuid','client_id','server_id','merchant_id','product_id','created_on','finished_on','creator_ip','abort_comment','billing_type','status'];
+      set.delete('merchant_id');
+      const preferred = [
+        'uuid','status',
+        'client_id',
+        'server_id','server_name',
+        'product_id','product_name','useDefaultDesktop',
+        'created_on','created_on_human',
+        'finished_on','finished_on_human',
+        'duration_human',
+        'creator_ip',
+        'score','score_reason','score_text',
+        'abort_comment',
+        'billing_type'
+      ];
       const rest = Array.from(set).filter(k => !preferred.includes(k)).sort();
       return preferred.filter(k => set.has(k)).concat(rest);
     }
 
-    function dataSig(rows) {
+    // Итоговый список колонок с учётом humanOnly
+    function getColumns(rows) {
+      const set = new Set();
+      rows.forEach(r => Object.keys(r || {}).forEach(k => set.add(k)));
+      if (humanOnly) {
+        return HUMAN_COLUMNS.filter(k => set.has(k));
+      }
+      return getAllColumns(rows);
+    }
+
+    // подпись данных: учитываем режим humanOnly, чтобы ререндерить при переключении
+    function mapSig(obj) {
+      const keys = Object.keys(obj || {}).sort();
+      let h = 0 >>> 0;
+      for (let i = 0; i < keys.length; i += Math.max(1, Math.ceil(keys.length/50))) {
+        const k = keys[i], v = obj[k];
+        const s = k + '|' + (typeof v === 'string' ? v : JSON.stringify(v)?.slice(0,64));
+        for (let j=0;j<s.length;j++) h = ((h*31) + s.charCodeAt(j)) >>> 0;
+      }
+      return keys.length + ':' + h.toString(16);
+    }
+    function sessionsSig(rows) {
       if (!Array.isArray(rows)) return '0';
       const n = rows.length; let h = 0 >>> 0;
-      const step = Math.max(1, Math.ceil(n / 20));
-      for (let i = 0; i < n; i += step) {
+      const step = Math.max(1, Math.ceil(n/20));
+      for (let i=0;i<n;i+=step) {
         const s = rows[i] || {};
         const key = (s.uuid||'') + '|' + (s.created_on||'') + '|' + (s.finished_on||'') + '|' + (s.status||'');
-        for (let j = 0; j < key.length; j++) h = ((h * 31) + key.charCodeAt(j)) >>> 0;
+        for (let j=0;j<key.length;j++) h = ((h*31) + key.charCodeAt(j)) >>> 0;
       }
       return n + ':' + h.toString(16);
     }
+    function fullSig() {
+      return [ sessionsSig(rawSessions||[]), mapSig(serverNames), mapSig(productsById), humanOnly ? 'H:1' : 'H:0' ].join('~');
+    }
+
+    // обогащаем строки
+    function buildAugmentedRows() {
+      const src = Array.isArray(rawSessions) ? rawSessions : [];
+      return src.map(s => {
+        const p = productsById[s.product_id] || null;
+        const created_on_human  = tsToHuman(s.created_on);
+        const finished_on_human = tsToHuman(s.finished_on);
+        const duration_human    = (s.created_on != null && s.finished_on != null)
+          ? msToHumanDuration(Number(s.finished_on) - Number(s.created_on))
+          : '';
+        const obj = {
+          ...s,
+          server_name: serverNames[s.server_id] || '',
+          product_name: p?.title || '',
+          useDefaultDesktop: (p?.useDefaultDesktop ?? null),
+          created_on_human,
+          finished_on_human,
+          duration_human,
+        };
+        delete obj.merchant_id;
+        return obj;
+      });
+    }
 
     // ---- RENDER ----
-    async function renderTable(sessions) {
-      const sig = dataSig(sessions);
+    async function renderTable() {
+      const sig = fullSig();
       if (sig === lastSig) { setPill('no changes'); return; }
       lastSig = sig;
+      if (!rawSessions) { setPill('waiting sessions'); return; }
+
+      const sessions = buildAugmentedRows();
 
       const headerRow = findSectionHeaderRow();
       if (!headerRow) { setPill('waiting header'); return; }
@@ -166,13 +253,21 @@
           toolbar = document.createElement('div');
           toolbar.className = 'ds-toolbar';
           toolbar.innerHTML = `
+            <button data-act="toggle-human">Human columns: Off</button>
             <button data-act="csv">Export CSV</button>
             <button data-act="clear">Clear filters</button>
-            <span style="opacity:.7;font-size:12px">${CDNJS.name} (если CSP не пускает — нативная таблица)</span>
+            <span style="opacity:.7;font-size:12px">${CDNJS.name} (если CSP не пустит — нативная таблица)</span>
           `;
           wrap.prepend(toolbar);
           toolbar.addEventListener('click', (e) => {
             const btn = e.target.closest('button[data-act]'); if (!btn) return;
+            if (btn.dataset.act === 'toggle-human') {
+              humanOnly = !humanOnly;
+              updateHumanButton(toolbar);
+              // сбросим сигнатуру, чтобы форснуть рендер с новыми колонками
+              lastSig = '';
+              scheduleRender(0);
+            }
             if (btn.dataset.act === 'csv') {
               if (tableInstance?.download) tableInstance.download('csv', 'drova-sessions.csv');
               else downloadCSVNative(sessions);
@@ -180,6 +275,8 @@
             if (btn.dataset.act === 'clear') tableInstance?.clearHeaderFilter?.();
           });
         });
+      } else {
+        updateHumanButton(toolbar);
       }
 
       // holder
@@ -193,11 +290,12 @@
         });
       }
 
-      // Пытаемся загрузить Tabulator с cdnjs
-      const diag = await ensureTabulatorCDNJS((m) => setPill(m));
-      window.__DS_TABULATOR_DIAG__ = diag; // для проверки в консоли
+      // Tabulator
+      const diag = await ensureTabulator();
+      window.__DS_TABULATOR_DIAG__ = diag;
+      const cols = getColumns(sessions);
       if (diag.ok) {
-        const cols = collectColumns(sessions).map(k => ({
+        const tabCols = cols.map(k => ({
           title: k, field: k,
           headerFilter: 'input',
           headerFilterPlaceholder: 'фильтр…',
@@ -210,7 +308,7 @@
           withLock(() => {
             tableInstance = new window.Tabulator(holder, {
               data: sessions,
-              columns: cols,
+              columns: tabCols,
               layout: "fitDataStretch",
               height: "520px",
               pagination: true,
@@ -222,24 +320,28 @@
           });
         } else {
           const current = tableInstance.getColumns().map(c => c.getField());
-          const want = cols.map(c => c.field);
+          const want = tabCols.map(c => c.field);
           const sameCols = current.length === want.length && current.every((f,i)=>f===want[i]);
           withLock(() => {
-            if (!sameCols) tableInstance.setColumns(cols);
+            if (!sameCols) tableInstance.setColumns(tabCols);
             tableInstance.replaceData(sessions);
           });
         }
-        setPill(`Tabulator (${diag.where}): ${sessions.length} rows`);
+        setPill(`Tabulator: ${sessions.length} rows${humanOnly ? ' (Human)' : ''}`);
         return;
       }
 
       // fallback: native
-      setPill(`native table (${diag.reason||'no Tabulator'})`);
-      renderNativeTable(holder, sessions);
+      setPill(`native table${humanOnly ? ' (Human)' : ''}${diag.reason ? ' — '+diag.reason : ''}`);
+      renderNativeTable(holder, sessions, cols);
     }
 
-    function renderNativeTable(holder, sessions) {
-      const cols = collectColumns(sessions);
+    function updateHumanButton(toolbar) {
+      const btn = toolbar.querySelector('button[data-act="toggle-human"]');
+      if (btn) btn.textContent = `Human columns: ${humanOnly ? 'On' : 'Off'}`;
+    }
+
+    function renderNativeTable(holder, sessions, cols) {
       let table = holder.querySelector('table.ds-native');
       if (!table) {
         withLock(() => {
@@ -268,7 +370,7 @@
       const frag = document.createDocumentFragment();
       for (const row of sessions) {
         const tr = document.createElement('tr');
-        for (const c of collectColumns(sessions)) {
+        for (const c of cols) {
           const td = document.createElement('td');
           const v = row?.[c];
           td.textContent = (v == null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
@@ -280,7 +382,7 @@
     }
 
     function downloadCSVNative(rows) {
-      const cols = collectColumns(rows);
+      const cols = getColumns(rows);
       const esc = (x) => {
         const s = (x == null) ? '' : String(x);
         return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
@@ -302,19 +404,43 @@
       const res = await origFetch.apply(this, args);
       try {
         const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-        if (API_RE.test(url)) {
-          const clone = res.clone();
+        const handle = async (clone) => {
           const ct = (clone.headers.get('content-type') || '').toLowerCase();
           let json;
           if (ct.includes('application/json')) json = await clone.json();
           else { const t = await clone.text(); try { json = JSON.parse(t); } catch {} }
+          return json;
+        };
+
+        if (SESSIONS_RE.test(url)) {
+          const json = await handle(res.clone());
           if (Array.isArray(json?.sessions)) {
-            lastSessions = json.sessions;
+            rawSessions = json.sessions;
+            setPill(`sessions:${rawSessions.length}`);
             scheduleRender(60);
-            setPill(`payload:${lastSessions.length}`);
+          }
+        } else if (NAMES_RE.test(url)) {
+          const json = await handle(res.clone());
+          if (json && typeof json === 'object' && !Array.isArray(json)) {
+            serverNames = { ...serverNames, ...json };
+            setPill(`server_names:${Object.keys(serverNames).length}`);
+            scheduleRender(40);
+          }
+        } else if (PRODUCTS_RE.test(url)) {
+          const json = await handle(res.clone());
+          let list = [];
+          if (Array.isArray(json)) list = json;
+          else if (Array.isArray(json?.list)) list = json.list;
+          if (list.length) {
+            for (const p of list) {
+              const id = p.productId || p.id || p.uuid;
+              if (id) productsById[id] = p;
+            }
+            setPill(`products:${Object.keys(productsById).length}`);
+            scheduleRender(40);
           }
         }
-      } catch(_) { setPill('fetch err'); }
+      } catch(_) {}
       return res;
     };
 
@@ -326,22 +452,43 @@
       xhr.open = function (method, url) { _url = url; return _open.apply(this, arguments); };
       xhr.addEventListener('load', function () {
         try {
-          if (!API_RE.test(_url)) return;
           const ct = (xhr.getResponseHeader('content-type') || '').toLowerCase();
-          if (ct.includes('application/json')) {
+          if (!ct.includes('application/json')) return;
+
+          if (SESSIONS_RE.test(_url)) {
             const json = JSON.parse(xhr.responseText);
             if (Array.isArray(json?.sessions)) {
-              lastSessions = json.sessions;
+              rawSessions = json.sessions;
+              setPill(`sessions:${rawSessions.length}`);
               scheduleRender(60);
-              setPill(`payload:${lastSessions.length}`);
+            }
+          } else if (NAMES_RE.test(_url)) {
+            const json = JSON.parse(xhr.responseText);
+            if (json && typeof json === 'object' && !Array.isArray(json)) {
+              serverNames = { ...serverNames, ...json };
+              setPill(`server_names:${Object.keys(serverNames).length}`);
+              scheduleRender(40);
+            }
+          } else if (PRODUCTS_RE.test(_url)) {
+            const json = JSON.parse(xhr.responseText);
+            let list = [];
+            if (Array.isArray(json)) list = json;
+            else if (Array.isArray(json?.list)) list = json.list;
+            if (list.length) {
+              for (const p of list) {
+                const id = p.productId || p.id || p.uuid;
+                if (id) productsById[id] = p;
+              }
+              setPill(`products:${Object.keys(productsById).length}`);
+              scheduleRender(40);
             }
           }
-        } catch(_) { setPill('xhr err'); }
+        } catch(_) {}
       });
       return xhr;
     };
 
-    // ---- OBSERVER: игнорим наши мутации ----
+    // ---- OBSERVER ----
     const observer = new MutationObserver((muts) => {
       if (MUTATE_LOCK > 0) return;
       const wrap = document.querySelector('.ds-wrap');
@@ -359,9 +506,8 @@
     observer.observe(document.documentElement, { childList: true, subtree: true });
 
     function scheduleRender(delay=80) {
-      if (!lastSessions) return;
       clearTimeout(renderTimer);
-      renderTimer = setTimeout(() => renderTable(lastSessions), delay);
+      renderTimer = setTimeout(() => renderTable(), delay);
     }
 
     // initial
