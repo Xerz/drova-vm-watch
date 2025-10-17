@@ -1,4 +1,4 @@
-// content.js — stable (no flicker): Tabulator (if allowed) or native table with smart updates
+// content.js — Drova sessions → Tabulator 6.3.1 (cdnjs) с диагностикой и fallback'ом в нативную таблицу
 (() => {
   const inject = (fn) => {
     const s = document.createElement('script');
@@ -15,14 +15,19 @@
     const API_RE = /\/session-manager\/sessions(?:\?|$)/i;
     const HIDDEN_ATTR = 'data-ds-hidden-original';
 
+    const CDNJS = {
+      css: 'https://cdnjs.cloudflare.com/ajax/libs/tabulator/6.3.1/css/tabulator.min.css',
+      js:  'https://cdnjs.cloudflare.com/ajax/libs/tabulator/6.3.1/js/tabulator.min.js',
+      name: 'cdnjs@6.3.1'
+    };
+
     // ---- STATE ----
     let lastSessions = null;
     let lastSig = '';
     let renderTimer = null;
     let MUTATE_LOCK = 0;
-    let tabulatorLoaded = false;
-    let tableInstance = null;     // Tabulator instance
-    let hiddenNodesCache = [];    // оригинальные карточки, которые мы спрятали
+    let tableInstance = null;     // Tabulator instance (если загружен)
+    let hiddenNodesCache = [];
 
     // ---- STATUS PILL ----
     const pill = document.createElement('div');
@@ -70,13 +75,12 @@
       return wrap;
     }
 
-    // спрячем «карточные» ноды после заголовка один раз; помечаем атрибутом
     function hideOriginalAfter(headerRow) {
       if (!headerRow) return;
       let node = headerRow.nextElementSibling;
       const toHide = [];
       while (node) {
-        if (isHeaderRow(node)) break; // следующая секция
+        if (isHeaderRow(node)) break;
         if (node.classList?.contains('ds-wrap')) { node = node.nextElementSibling; continue; }
         if (node.nodeType === 1) toHide.push(node);
         node = node.nextElementSibling;
@@ -104,14 +108,24 @@
         s.onload = res; s.onerror = rej; document.head.appendChild(s);
       });
     }
-    async function ensureTabulator() {
-      if (tabulatorLoaded) return true;
+
+    // Диагностическая загрузка Tabulator с cdnjs
+    async function ensureTabulatorCDNJS(setStatus) {
+      if (window.Tabulator) return { ok: true, where: 'present' };
       try {
-        await loadCSS('https://cdn.jsdelivr.net/npm/tabulator-tables@5.6.2/dist/css/tabulator.min.css');
-        await loadJS('https://cdn.jsdelivr.net/npm/tabulator-tables@5.6.2/dist/js/tabulator.min.js');
-        if (window.Tabulator) { tabulatorLoaded = true; return true; }
-      } catch(_) {}
-      return false;
+        setStatus?.(`load ${CDNJS.name}: css`);
+        await loadCSS(CDNJS.css);
+      } catch (e) {
+        return { ok: false, reason: `CSS blocked: ${e?.message||e}` };
+      }
+      try {
+        setStatus?.(`load ${CDNJS.name}: js`);
+        await loadJS(CDNJS.js);
+      } catch (e) {
+        return { ok: false, reason: `JS blocked: ${e?.message||e}` };
+      }
+      if (window.Tabulator) return { ok: true, where: CDNJS.name };
+      return { ok: false, reason: 'loaded but window.Tabulator missing' };
     }
 
     function collectColumns(rows) {
@@ -122,12 +136,10 @@
       return preferred.filter(k => set.has(k)).concat(rest);
     }
 
-    // простая сигнатура данных, чтобы не перерисовывать зря
     function dataSig(rows) {
       if (!Array.isArray(rows)) return '0';
-      const n = rows.length;
-      let h = 0 >>> 0;
-      const step = Math.max(1, Math.ceil(n / 20)); // семплим до 20 строк
+      const n = rows.length; let h = 0 >>> 0;
+      const step = Math.max(1, Math.ceil(n / 20));
       for (let i = 0; i < n; i += step) {
         const s = rows[i] || {};
         const key = (s.uuid||'') + '|' + (s.created_on||'') + '|' + (s.finished_on||'') + '|' + (s.status||'');
@@ -156,7 +168,7 @@
           toolbar.innerHTML = `
             <button data-act="csv">Export CSV</button>
             <button data-act="clear">Clear filters</button>
-            <span style="opacity:.7;font-size:12px">если Tabulator запрещён CSP — будет нативная таблица</span>
+            <span style="opacity:.7;font-size:12px">${CDNJS.name} (если CSP не пускает — нативная таблица)</span>
           `;
           wrap.prepend(toolbar);
           toolbar.addEventListener('click', (e) => {
@@ -181,8 +193,10 @@
         });
       }
 
-      // Tabulator if possible
-      if (await ensureTabulator()) {
+      // Пытаемся загрузить Tabulator с cdnjs
+      const diag = await ensureTabulatorCDNJS((m) => setPill(m));
+      window.__DS_TABULATOR_DIAG__ = diag; // для проверки в консоли
+      if (diag.ok) {
         const cols = collectColumns(sessions).map(k => ({
           title: k, field: k,
           headerFilter: 'input',
@@ -200,7 +214,6 @@
               layout: "fitDataStretch",
               height: "520px",
               pagination: true,
-              paginationMode: "local",
               paginationSize: 25,
               movableColumns: true,
               selectable: false,
@@ -208,7 +221,6 @@
             });
           });
         } else {
-          // обновление без пересоздания DOM
           const current = tableInstance.getColumns().map(c => c.getField());
           const want = cols.map(c => c.field);
           const sameCols = current.length === want.length && current.every((f,i)=>f===want[i]);
@@ -217,12 +229,12 @@
             tableInstance.replaceData(sessions);
           });
         }
-        setPill(`Tabulator: ${sessions.length} rows`);
+        setPill(`Tabulator (${diag.where}): ${sessions.length} rows`);
         return;
       }
 
-      // fallback: native table — обновляем только tbody
-      setPill('native table');
+      // fallback: native
+      setPill(`native table (${diag.reason||'no Tabulator'})`);
       renderNativeTable(holder, sessions);
     }
 
@@ -242,7 +254,6 @@
           holder.innerHTML = ''; holder.appendChild(table);
         });
       } else {
-        // если состав колонок изменился — перестраиваем только thead (редко)
         const currentCols = Array.from(table.tHead.rows[0].cells).map(th => th.textContent);
         const needCols = cols.join('|'), haveCols = currentCols.join('|');
         if (needCols !== haveCols) {
@@ -253,12 +264,11 @@
           });
         }
       }
-      // перерисовка tbody (одна операция replaceChildren ⇒ минимум мутаций)
-      const tbody = table.tBodies[0];
+      const tbody = holder.querySelector('table.ds-native tbody');
       const frag = document.createDocumentFragment();
       for (const row of sessions) {
         const tr = document.createElement('tr');
-        for (const c of cols) {
+        for (const c of collectColumns(sessions)) {
           const td = document.createElement('td');
           const v = row?.[c];
           td.textContent = (v == null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
@@ -331,7 +341,7 @@
       return xhr;
     };
 
-    // ---- OBSERVER: игнорим наши мутации (wrap/pill/hidden originals) ----
+    // ---- OBSERVER: игнорим наши мутации ----
     const observer = new MutationObserver((muts) => {
       if (MUTATE_LOCK > 0) return;
       const wrap = document.querySelector('.ds-wrap');
