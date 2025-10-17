@@ -63,6 +63,19 @@
     const setPill = (msg) => withLock(() => pill.textContent = 'DS: ' + msg);
 
     // ---- HELPERS ----
+    // форсим limit=1000 для sessions
+    function rewriteSessionsLimit(urlLike) {
+      try {
+        const u = new URL(typeof urlLike === 'string' ? urlLike : String(urlLike), location.href);
+        if (!/\/session-manager\/sessions(?:\/|$)/.test(u.pathname)) return null;
+        if (u.searchParams.get('limit') !== '1000') {
+          u.searchParams.set('limit', '1000');
+          return u.href;                    // вернуть переписанный URL
+        }
+      } catch {}
+      return null;                          // без изменений
+}
+
     function withLock(fn) { MUTATE_LOCK++; try { return fn(); } finally { MUTATE_LOCK--; } }
 
     function tsToHuman(ts) {
@@ -398,95 +411,134 @@
       a.click(); URL.revokeObjectURL(a.href);
     }
 
-    // ---- API HOOKS ----
+    // ---- API HOOKS (fetch) ----
     const origFetch = window.fetch;
-    window.fetch = async function patchedFetch(...args) {
-      const res = await origFetch.apply(this, args);
+    window.fetch = async function patchedFetch(input, init) {
+      // 2.1. ДО отправки — переписываем limit
+      let modInput = input;
       try {
-        const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+        const urlStr = typeof input === 'string'
+          ? input
+          : (input instanceof Request ? input.url : input?.url || '');
+        const rew = urlStr ? rewriteSessionsLimit(urlStr) : null;
+        if (rew) {
+          // строка → строка; Request → новый Request(rew, input); остальное → строка
+          if (typeof input === 'string') {
+            modInput = rew;
+          } else if (input instanceof Request) {
+            modInput = new Request(rew, input);     // клонит body/опции
+          } else {
+            modInput = rew;
+          }
+          // опционально покажем статус
+          setPill?.('rewrite limit→1000');
+        }
+      } catch {}
+
+      // 2.2. отправляем
+      const res = await origFetch.apply(this, [modInput, init]);
+
+      // 2.3. ПОСЛЕ — разбираем полезную нагрузку, как раньше
+      try {
+        const usedUrl = typeof modInput === 'string'
+          ? modInput
+          : (modInput instanceof Request ? modInput.url : modInput?.url || '');
+
         const handle = async (clone) => {
           const ct = (clone.headers.get('content-type') || '').toLowerCase();
-          let json;
-          if (ct.includes('application/json')) json = await clone.json();
-          else { const t = await clone.text(); try { json = JSON.parse(t); } catch {} }
-          return json;
+          if (ct.includes('application/json')) return clone.json();
+          const t = await clone.text(); try { return JSON.parse(t); } catch { return null; }
         };
 
-        if (SESSIONS_RE.test(url)) {
+        if (/\/session-manager\/sessions(?:\?|$)/i.test(usedUrl)) {
           const json = await handle(res.clone());
           if (Array.isArray(json?.sessions)) {
             rawSessions = json.sessions;
-            setPill(`sessions:${rawSessions.length}`);
+            setPill?.(`sessions:${rawSessions.length}`);
             scheduleRender(60);
           }
-        } else if (NAMES_RE.test(url)) {
+        } else if (/\/server-manager\/servers\/server_names(?:\?|$)/i.test(usedUrl)) {
           const json = await handle(res.clone());
           if (json && typeof json === 'object' && !Array.isArray(json)) {
             serverNames = { ...serverNames, ...json };
-            setPill(`server_names:${Object.keys(serverNames).length}`);
+            setPill?.(`server_names:${Object.keys(serverNames).length}`);
             scheduleRender(40);
           }
-        } else if (PRODUCTS_RE.test(url)) {
+        } else if (/\/product-manager\/product\/listfull2(?:\?|$)/i.test(usedUrl)) {
           const json = await handle(res.clone());
-          let list = [];
-          if (Array.isArray(json)) list = json;
-          else if (Array.isArray(json?.list)) list = json.list;
+          let list = Array.isArray(json) ? json : (Array.isArray(json?.list) ? json.list : []);
           if (list.length) {
             for (const p of list) {
               const id = p.productId || p.id || p.uuid;
               if (id) productsById[id] = p;
             }
-            setPill(`products:${Object.keys(productsById).length}`);
+            setPill?.(`products:${Object.keys(productsById).length}`);
             scheduleRender(40);
           }
         }
-      } catch(_) {}
+      } catch {}
       return res;
     };
 
+
+    // ---- API HOOKS (XHR) ----
     const OrigXHR = window.XMLHttpRequest;
     window.XMLHttpRequest = function PatchedXHR() {
       const xhr = new OrigXHR();
       let _url = '';
       const _open = xhr.open;
-      xhr.open = function (method, url) { _url = url; return _open.apply(this, arguments); };
+
+      xhr.open = function(method, url /*, ...rest */) {
+        try {
+          const rew = rewriteSessionsLimit(url);
+          _url = rew || url;                      // сохраняем уже переписанный URL
+          // передаём в оригинальный open с теми же аргами, но с новым URL
+          const args = Array.from(arguments);
+          args[1] = _url;
+          return _open.apply(this, args);
+        } catch {
+          _url = url;
+          return _open.apply(this, arguments);
+        }
+      };
+
       xhr.addEventListener('load', function () {
         try {
           const ct = (xhr.getResponseHeader('content-type') || '').toLowerCase();
           if (!ct.includes('application/json')) return;
 
-          if (SESSIONS_RE.test(_url)) {
+          if (/\/session-manager\/sessions(?:\?|$)/i.test(_url)) {
             const json = JSON.parse(xhr.responseText);
             if (Array.isArray(json?.sessions)) {
               rawSessions = json.sessions;
-              setPill(`sessions:${rawSessions.length}`);
+              setPill?.(`sessions:${rawSessions.length}`);
               scheduleRender(60);
             }
-          } else if (NAMES_RE.test(_url)) {
+          } else if (/\/server-manager\/servers\/server_names(?:\?|$)/i.test(_url)) {
             const json = JSON.parse(xhr.responseText);
             if (json && typeof json === 'object' && !Array.isArray(json)) {
               serverNames = { ...serverNames, ...json };
-              setPill(`server_names:${Object.keys(serverNames).length}`);
+              setPill?.(`server_names:${Object.keys(serverNames).length}`);
               scheduleRender(40);
             }
-          } else if (PRODUCTS_RE.test(_url)) {
+          } else if (/\/product-manager\/product\/listfull2(?:\?|$)/i.test(_url)) {
             const json = JSON.parse(xhr.responseText);
-            let list = [];
-            if (Array.isArray(json)) list = json;
-            else if (Array.isArray(json?.list)) list = json.list;
+            let list = Array.isArray(json) ? json : (Array.isArray(json?.list) ? json.list : []);
             if (list.length) {
               for (const p of list) {
                 const id = p.productId || p.id || p.uuid;
                 if (id) productsById[id] = p;
               }
-              setPill(`products:${Object.keys(productsById).length}`);
+              setPill?.(`products:${Object.keys(productsById).length}`);
               scheduleRender(40);
             }
           }
-        } catch(_) {}
+        } catch {}
       });
+
       return xhr;
     };
+
 
     // ---- OBSERVER ----
     const observer = new MutationObserver((muts) => {
