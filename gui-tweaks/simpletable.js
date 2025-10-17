@@ -1,6 +1,5 @@
-// content.js — Drova sessions → Tabulator (filters, pagination, CSV)
+// content.js — Drova sessions → Tabulator 6.3.1 (cdnjs) + server_name + product_name + useDefaultDesktop
 (() => {
-  // Впрыск в главный контекст страницы
   const inject = (fn) => {
     const s = document.createElement('script');
     s.textContent = '(' + fn.toString() + ')();';
@@ -11,190 +10,382 @@
   inject(function main() {
     'use strict';
 
-    const SECTION_TITLE_RE = /Играли на ваших станциях/i;
-    const API_RE = /https?:\/\/services\.drova\.io\/session-manager\/sessions(?:\?|$)/i;
+    // ---- CONFIG ----
+    const TITLE_TEXT = /Играли на ваших станциях/i;
+    const SESSIONS_RE = /\/session-manager\/sessions(?:\?|$)/i;
+    const NAMES_RE    = /\/server-manager\/servers\/server_names(?:\?|$)/i;
+    const PRODUCTS_RE = /\/product-manager\/product\/listfull2(?:\?|$)/i;
+    const HIDDEN_ATTR = 'data-ds-hidden-original';
 
-    // --- CDN загрузчик ---
+    const CDNJS = {
+      css: 'https://cdnjs.cloudflare.com/ajax/libs/tabulator/6.3.1/css/tabulator.min.css',
+      js:  'https://cdnjs.cloudflare.com/ajax/libs/tabulator/6.3.1/js/tabulator.min.js',
+      name: 'cdnjs@6.3.1'
+    };
+
+    // ---- STATE ----
+    let rawSessions = null;            // исходный массив sessions[]
+    let serverNames = {};              // { server_id: server_name }
+    let productsById = {};             // { productId: productObj }
+    let lastSig = '';                  // сигнатура данных для защиты от лишних ререндеров
+    let renderTimer = null;
+    let MUTATE_LOCK = 0;
+    let tableInstance = null;
+    let hiddenNodesCache = [];
+
+    // ---- STATUS PILL ----
+    const pill = document.createElement('div');
+    pill.id = 'ds-pill';
+    const pillCSS = document.createElement('style');
+    pillCSS.textContent = `
+      #ds-pill{position:fixed;right:8px;bottom:8px;z-index:999999;background:rgba(0,0,0,.75);
+        color:#fff;font:12px/1.2 system-ui,Arial,sans-serif;padding:6px 8px;border-radius:8px}
+      .ds-wrap{margin-top:8px}
+      .ds-toolbar{display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap}
+      .ds-toolbar button{padding:6px 10px;border:1px solid rgba(0,0,0,.15);border-radius:6px;background:#f7f7f7;cursor:pointer}
+      .ds-native{width:100%;border-collapse:collapse;table-layout:auto}
+      .ds-native th,.ds-native td{border:1px solid rgba(0,0,0,.12);padding:6px 8px;font-size:12px;vertical-align:top;word-break:break-word}
+      .ds-native thead th{position:sticky;top:0;background:#fff}
+    `;
+    withLock(() => {
+      (document.head || document.documentElement).appendChild(pillCSS);
+      (document.body || document.documentElement).appendChild(pill);
+    });
+    const setPill = (msg) => withLock(() => pill.textContent = 'DS: ' + msg);
+
+    // ---- HELPERS ----
+    function withLock(fn) { MUTATE_LOCK++; try { return fn(); } finally { MUTATE_LOCK--; } }
+
+    function findSectionHeaderRow(root=document) {
+      const headings = Array.from(root.querySelectorAll('h2,h3,h4'));
+      const h = headings.find(el => TITLE_TEXT.test(el.textContent || ''));
+      if (!h) return null;
+      return h.closest('.ivu-row.ivu-row-flex') || h.parentElement;
+    }
+    function isHeaderRow(el) {
+      if (!el) return false;
+      const head = el.querySelector(':scope h2, :scope h3, :scope h4');
+      return !!head && TITLE_TEXT.test(head.textContent || '');
+    }
+    function ensureWrap(headerRow) {
+      if (!headerRow) return null;
+      let wrap = headerRow.nextElementSibling;
+      if (wrap?.classList?.contains('ds-wrap')) return wrap;
+      withLock(() => {
+        wrap = document.createElement('div');
+        wrap.className = 'ds-wrap';
+        headerRow.after(wrap);
+      });
+      return wrap;
+    }
+
+    function hideOriginalAfter(headerRow) {
+      if (!headerRow) return;
+      let node = headerRow.nextElementSibling;
+      const toHide = [];
+      while (node) {
+        if (isHeaderRow(node)) break; // следующая секция
+        if (node.classList?.contains('ds-wrap')) { node = node.nextElementSibling; continue; }
+        if (node.nodeType === 1) toHide.push(node);
+        node = node.nextElementSibling;
+      }
+      withLock(() => {
+        toHide.forEach(n => {
+          if (!n.hasAttribute(HIDDEN_ATTR)) {
+            n.setAttribute(HIDDEN_ATTR, '1');
+            if (n.style.display !== 'none') n.style.display = 'none';
+            hiddenNodesCache.push(n);
+          }
+        });
+      });
+    }
+
     function loadCSS(href) {
       return new Promise((res, rej) => {
-        const l = document.createElement('link');
-        l.rel = 'stylesheet'; l.href = href;
-        l.onload = () => res(); l.onerror = rej;
-        document.head.appendChild(l);
+        const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = href;
+        l.onload = res; l.onerror = rej; document.head.appendChild(l);
       });
     }
     function loadJS(src) {
       return new Promise((res, rej) => {
-        const s = document.createElement('script');
-        s.src = src; s.async = true;
-        s.onload = () => res(); s.onerror = rej;
-        document.head.appendChild(s);
+        const s = document.createElement('script'); s.src = src; s.async = true;
+        s.onload = res; s.onerror = rej; document.head.appendChild(s);
       });
     }
 
-    // --- DOM helpers ---
-    function isHeaderRow(el) {
-      if (!el || el.nodeType !== 1) return false;
-      if (!el.classList.contains('ivu-row') || !el.classList.contains('ivu-row-flex')) return false;
-      const acc = el.querySelector(':scope > .account-header h4');
-      return !!acc && SECTION_TITLE_RE.test(acc.textContent || '');
-    }
-    function findSectionHeaderRow(root = document) {
-      const rows = Array.from(root.querySelectorAll('div.ivu-row.ivu-row-flex'));
-      return rows.find(isHeaderRow) || null;
-    }
-    function hideOriginalSection(headerRow) {
-      let node = headerRow?.nextElementSibling;
-      while (node) {
-        if (isHeaderRow(node)) break;
-        if (node.classList.contains('ivu-row') && node.classList.contains('ivu-row-flex')) {
-          node.style.display = 'none';
-        }
-        node = node.nextElementSibling;
+    async function ensureTabulator() {
+      if (window.Tabulator) return { ok: true, where: 'present' };
+      try {
+        setPill(`load ${CDNJS.name}: css`);
+        await loadCSS(CDNJS.css);
+        setPill(`load ${CDNJS.name}: js`);
+        await loadJS(CDNJS.js);
+      } catch (e) {
+        return { ok: false, reason: e?.message || 'load error' };
       }
-    }
-    function ensureWrapper(headerRow) {
-      let wrapper = headerRow?.nextElementSibling;
-      if (wrapper && wrapper.classList.contains('drova-sessions-table-wrapper')) return wrapper;
-      wrapper = document.createElement('div');
-      wrapper.className = 'drova-sessions-table-wrapper';
-      headerRow.after(wrapper);
-      return wrapper;
+      if (window.Tabulator) return { ok: true, where: CDNJS.name };
+      return { ok: false, reason: 'loaded but window.Tabulator missing' };
     }
 
-    // Немного базовых стилей
-    const baseCss = document.createElement('style');
-    baseCss.textContent = `
-      .drova-toolbar{display:flex;gap:8px;align-items:center;margin:8px 0 6px 0;flex-wrap:wrap}
-      .drova-toolbar button{padding:6px 10px;border:1px solid rgba(0,0,0,.15);border-radius:6px;background:#f7f7f7;cursor:pointer}
-      .drova-sessions-table-wrapper{margin-top:8px}
-    `;
-    document.head.appendChild(baseCss);
-
-    let lastSessions = null;
-    let table = null; // Tabulator instance
-
-    // Собираем список колонок из JSON
+    // колонкам задаём приоритет и убираем merchant_id
     function collectColumns(rows) {
       const set = new Set();
-      rows.forEach(r => Object.keys(r||{}).forEach(k => set.add(k)));
-      const preferred = ['uuid','client_id','server_id','merchant_id','product_id','created_on','finished_on','creator_ip','abort_comment','billing_type','status'];
+      rows.forEach(r => Object.keys(r || {}).forEach(k => set.add(k)));
+      set.delete('merchant_id'); // 1) убрать merchant_id
+
+      // желаемый порядок
+      const preferred = [
+        'uuid','status',
+        'client_id',
+        'server_id','server_name',             // 2) server_name
+        'product_id','product_name','useDefaultDesktop', // 3-4) из продуктов
+        'created_on','finished_on',
+        'creator_ip',
+        'abort_comment',
+        'billing_type'
+      ];
       const rest = Array.from(set).filter(k => !preferred.includes(k)).sort();
-      const keys = preferred.filter(k => set.has(k)).concat(rest);
-      // На каждую колонку — фильтр в заголовке
-      return keys.map(k => ({
-        title: k,
-        field: k,
-        headerFilter: 'input',
-        headerFilterPlaceholder: 'фильтр…',
-        // без форматирования: просто строка/число/JSON
-        formatter: (cell) => {
-          const v = cell.getValue();
-          return (v == null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
-        }
-      }));
+      return preferred.filter(k => set.has(k)).concat(rest);
     }
 
-    // Рендер Tabulator
-    async function renderTabulator(sessions) {
-      const headerRow = findSectionHeaderRow();
-      if (!headerRow) return; // подождём секцию
-      hideOriginalSection(headerRow);
-      const wrapper = ensureWrapper(headerRow);
-
-      // Грузим Tabulator с CDN (CSS + JS)
-      if (!window.Tabulator) {
-        await loadCSS('https://cdn.jsdelivr.net/npm/tabulator-tables/dist/css/tabulator.min.css');
-        await loadJS('https://cdn.jsdelivr.net/npm/tabulator-tables/dist/js/tabulator.min.js');
+    // гашим «лишние» перерисовки: включаем в сигнатуру и карты имён/продуктов
+    function mapSig(obj) {
+      const keys = Object.keys(obj || {}).sort();
+      let h = 0 >>> 0;
+      for (let i = 0; i < keys.length; i += Math.max(1, Math.ceil(keys.length/50))) {
+        const k = keys[i], v = obj[k];
+        const s = k + '|' + (typeof v === 'string' ? v : JSON.stringify(v)?.slice(0,64));
+        for (let j = 0; j < s.length; j++) h = ((h * 31) + s.charCodeAt(j)) >>> 0;
       }
+      return keys.length + ':' + h.toString(16);
+    }
+    function sessionsSig(rows) {
+      if (!Array.isArray(rows)) return '0';
+      const n = rows.length; let h = 0 >>> 0;
+      const step = Math.max(1, Math.ceil(n / 20));
+      for (let i = 0; i < n; i += step) {
+        const s = rows[i] || {};
+        const key = (s.uuid||'') + '|' + (s.created_on||'') + '|' + (s.finished_on||'') + '|' + (s.status||'');
+        for (let j = 0; j < key.length; j++) h = ((h * 31) + key.charCodeAt(j)) >>> 0;
+      }
+      return n + ':' + h.toString(16);
+    }
+    function fullSig() {
+      return [ sessionsSig(rawSessions||[]), mapSig(serverNames), mapSig(productsById) ].join('~');
+    }
 
-      // Toolbar
-      let toolbar = wrapper.querySelector('.drova-toolbar');
+    // обогащаем строки из sessions дополнительными полями и убираем merchant_id
+    function buildAugmentedRows() {
+      const src = Array.isArray(rawSessions) ? rawSessions : [];
+      return src.map(s => {
+        const p = productsById[s.product_id] || null;
+        const obj = {
+          ...s,
+          server_name: serverNames[s.server_id] || '',
+          product_name: p?.title || '',
+          useDefaultDesktop: (p?.useDefaultDesktop ?? null)
+        };
+        delete obj.merchant_id; // 1) убрать merchant_id
+        return obj;
+      });
+    }
+
+    // ---- RENDER ----
+    async function renderTable() {
+      const sig = fullSig();
+      if (sig === lastSig) { setPill('no changes'); return; }
+      lastSig = sig;
+      if (!rawSessions) { setPill('waiting sessions'); return; }
+
+      const sessions = buildAugmentedRows();
+
+      const headerRow = findSectionHeaderRow();
+      if (!headerRow) { setPill('waiting header'); return; }
+      const wrap = ensureWrap(headerRow);
+      hideOriginalAfter(headerRow);
+
+      // toolbar
+      let toolbar = wrap.querySelector('.ds-toolbar');
       if (!toolbar) {
-        toolbar = document.createElement('div');
-        toolbar.className = 'drova-toolbar';
-        toolbar.innerHTML = `
-          <button data-act="csv">Export CSV</button>
-          <button data-act="clear">Clear filters</button>
-          <span style="opacity:.7;font-size:12px">Tabulator: фильтры в шапке таблицы</span>
-        `;
-        wrapper.appendChild(toolbar);
-        toolbar.addEventListener('click', (e) => {
-          const btn = e.target.closest('button[data-act]'); if (!btn) return;
-          if (btn.dataset.act === 'csv') table?.download('csv', 'drova-sessions.csv');
-          if (btn.dataset.act === 'clear') table?.clearHeaderFilter();
+        withLock(() => {
+          toolbar = document.createElement('div');
+          toolbar.className = 'ds-toolbar';
+          toolbar.innerHTML = `
+            <button data-act="csv">Export CSV</button>
+            <button data-act="clear">Clear filters</button>
+            <span style="opacity:.7;font-size:12px">${CDNJS.name} (если CSP не пустит — нативная таблица)</span>
+          `;
+          wrap.prepend(toolbar);
+          toolbar.addEventListener('click', (e) => {
+            const btn = e.target.closest('button[data-act]'); if (!btn) return;
+            if (btn.dataset.act === 'csv') {
+              if (tableInstance?.download) tableInstance.download('csv', 'drova-sessions.csv');
+              else downloadCSVNative(sessions);
+            }
+            if (btn.dataset.act === 'clear') tableInstance?.clearHeaderFilter?.();
+          });
         });
       }
 
-      // Контейнер таблицы
-      let holder = wrapper.querySelector('#drova-tabulator');
+      // holder
+      let holder = wrap.querySelector('#ds-holder');
       if (!holder) {
-        holder = document.createElement('div');
-        holder.id = 'drova-tabulator';
-        holder.style.minHeight = '240px';
-        wrapper.appendChild(holder);
+        withLock(() => {
+          holder = document.createElement('div');
+          holder.id = 'ds-holder';
+          holder.style.minHeight = '320px';
+          wrap.appendChild(holder);
+        });
       }
 
-      const columns = collectColumns(sessions);
+      // пробуем Tabulator
+      const diag = await ensureTabulator();
+      window.__DS_TABULATOR_DIAG__ = diag;
+      if (diag.ok) {
+        const cols = collectColumns(sessions).map(k => ({
+          title: k, field: k,
+          headerFilter: 'input',
+          headerFilterPlaceholder: 'фильтр…',
+          formatter: (cell) => {
+            const v = cell.getValue();
+            return (v == null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+          }
+        }));
 
+        if (!tableInstance) {
+          withLock(() => {
+            tableInstance = new window.Tabulator(holder, {
+              data: sessions,
+              columns: cols,
+              layout: "fitDataStretch",
+              height: "520px",
+              pagination: true,
+              paginationSize: 25,
+              movableColumns: true,
+              selectable: false,
+              initialSort: [{ column: "created_on", dir: "desc" }],
+            });
+          });
+        } else {
+          const current = tableInstance.getColumns().map(c => c.getField());
+          const want = cols.map(c => c.field);
+          const sameCols = current.length === want.length && current.every((f,i)=>f===want[i]);
+          withLock(() => {
+            if (!sameCols) tableInstance.setColumns(cols);
+            tableInstance.replaceData(sessions);
+          });
+        }
+        setPill(`Tabulator: ${sessions.length} rows`);
+        return;
+      }
+
+      // fallback: native
+      setPill(`native table (${diag.reason||'no Tabulator'})`);
+      renderNativeTable(holder, sessions);
+    }
+
+    function renderNativeTable(holder, sessions) {
+      const cols = collectColumns(sessions);
+      let table = holder.querySelector('table.ds-native');
       if (!table) {
-        table = new window.Tabulator(holder, {
-          data: sessions,
-          columns,
-          layout: "fitDataStretch",
-          height: "500px",
-          pagination: true,
-          paginationMode: "local",
-          paginationSize: 25,
-          movableColumns: true,
-          selectable: false,
-          index: "uuid",        // если есть
-          reactiveData: false,  // мы обновляем данными целиком
-          initialSort: [{column: "created_on", dir: "desc"}],
+        withLock(() => {
+          table = document.createElement('table');
+          table.className = 'ds-native';
+          const thead = document.createElement('thead');
+          const trh = document.createElement('tr');
+          cols.forEach(c => { const th = document.createElement('th'); th.textContent = c; trh.appendChild(th); });
+          thead.appendChild(trh);
+          const tbody = document.createElement('tbody');
+          table.appendChild(thead); table.appendChild(tbody);
+          holder.innerHTML = ''; holder.appendChild(table);
         });
       } else {
-        // Обновляем колонки, если структура изменилась
-        const currentCols = table.getColumns().map(c => c.getField());
-        const wantCols = columns.map(c => c.field);
-        const same = currentCols.length === wantCols.length && currentCols.every((f,i)=>f===wantCols[i]);
-        if (!same) {
-          table.setColumns(columns); // перерисует заголовок с фильтрами
+        const currentCols = Array.from(table.tHead.rows[0].cells).map(th => th.textContent);
+        const needCols = cols.join('|'), haveCols = currentCols.join('|');
+        if (needCols !== haveCols) {
+          withLock(() => {
+            const trh = document.createElement('tr');
+            cols.forEach(c => { const th = document.createElement('th'); th.textContent = c; trh.appendChild(th); });
+            table.tHead.replaceChildren(trh);
+          });
         }
-        table.replaceData(sessions);
       }
+      const tbody = holder.querySelector('table.ds-native tbody');
+      const frag = document.createDocumentFragment();
+      for (const row of sessions) {
+        const tr = document.createElement('tr');
+        for (const c of cols) {
+          const td = document.createElement('td');
+          const v = row?.[c];
+          td.textContent = (v == null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+          tr.appendChild(td);
+        }
+        frag.appendChild(tr);
+      }
+      withLock(() => { tbody.replaceChildren(frag); });
     }
 
-    function tryRenderSoon() {
-      if (!lastSessions) return;
-      // ждём появления секции; пробуем несколько раз
-      let attempts = 0;
-      const tick = () => {
-        attempts++;
-        if (findSectionHeaderRow()) { renderTabulator(lastSessions); }
-        else if (attempts < 40) setTimeout(tick, 150);
+    function downloadCSVNative(rows) {
+      const cols = collectColumns(rows);
+      const esc = (x) => {
+        const s = (x == null) ? '' : String(x);
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
       };
-      tick();
+      const csv = [cols.map(esc).join(',')].concat(
+        rows.map(r => cols.map(c => {
+          const v = r?.[c];
+          return esc(typeof v === 'object' ? JSON.stringify(v) : v);
+        }).join(','))
+      ).join('\n');
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'drova-sessions.csv';
+      a.click(); URL.revokeObjectURL(a.href);
     }
 
-    // === Перехват API (fetch + XHR) ===
+    // ---- API HOOKS ----
     const origFetch = window.fetch;
     window.fetch = async function patchedFetch(...args) {
       const res = await origFetch.apply(this, args);
       try {
-        const input = args[0];
-        const url = typeof input === 'string' ? input : input?.url || '';
-        if (API_RE.test(url)) {
-          const clone = res.clone();
+        const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+        const handle = async (clone) => {
           const ct = (clone.headers.get('content-type') || '').toLowerCase();
           let json;
           if (ct.includes('application/json')) json = await clone.json();
           else { const t = await clone.text(); try { json = JSON.parse(t); } catch {} }
+          return json;
+        };
+
+        if (SESSIONS_RE.test(url)) {
+          const json = await handle(res.clone());
           if (Array.isArray(json?.sessions)) {
-            lastSessions = json.sessions;
-            tryRenderSoon();
+            rawSessions = json.sessions;
+            setPill(`sessions:${rawSessions.length}`);
+            scheduleRender(60);
+          }
+        } else if (NAMES_RE.test(url)) {
+          const json = await handle(res.clone());
+          if (json && typeof json === 'object' && !Array.isArray(json)) {
+            serverNames = { ...serverNames, ...json };
+            setPill(`server_names:${Object.keys(serverNames).length}`);
+            // форс-перерисовку (сигнатура изменится)
+            scheduleRender(40);
+          }
+        } else if (PRODUCTS_RE.test(url)) {
+          const json = await handle(res.clone());
+          let list = [];
+          if (Array.isArray(json)) list = json;
+          else if (Array.isArray(json?.list)) list = json.list;
+          if (list.length) {
+            for (const p of list) {
+              const id = p.productId || p.id || p.uuid;
+              if (id) productsById[id] = p;
+            }
+            setPill(`products:${Object.keys(productsById).length}`);
+            scheduleRender(40);
           }
         }
-      } catch {}
+      } catch(_) {}
       return res;
     };
 
@@ -206,23 +397,70 @@
       xhr.open = function (method, url) { _url = url; return _open.apply(this, arguments); };
       xhr.addEventListener('load', function () {
         try {
-          if (!API_RE.test(_url)) return;
           const ct = (xhr.getResponseHeader('content-type') || '').toLowerCase();
-          if (ct.includes('application/json')) {
+          if (!ct.includes('application/json')) return;
+
+          if (SESSIONS_RE.test(_url)) {
             const json = JSON.parse(xhr.responseText);
             if (Array.isArray(json?.sessions)) {
-              lastSessions = json.sessions;
-              tryRenderSoon();
+              rawSessions = json.sessions;
+              setPill(`sessions:${rawSessions.length}`);
+              scheduleRender(60);
+            }
+          } else if (NAMES_RE.test(_url)) {
+            const json = JSON.parse(xhr.responseText);
+            if (json && typeof json === 'object' && !Array.isArray(json)) {
+              serverNames = { ...serverNames, ...json };
+              setPill(`server_names:${Object.keys(serverNames).length}`);
+              scheduleRender(40);
+            }
+          } else if (PRODUCTS_RE.test(_url)) {
+            const json = JSON.parse(xhr.responseText);
+            let list = [];
+            if (Array.isArray(json)) list = json;
+            else if (Array.isArray(json?.list)) list = json.list;
+            if (list.length) {
+              for (const p of list) {
+                const id = p.productId || p.id || p.uuid;
+                if (id) productsById[id] = p;
+              }
+              setPill(`products:${Object.keys(productsById).length}`);
+              scheduleRender(40);
             }
           }
-        } catch {}
+        } catch(_) {}
       });
       return xhr;
     };
 
-    // Первый заход: если секция уже есть и данные подгружались раньше
-    document.readyState === 'loading'
-      ? document.addEventListener('DOMContentLoaded', tryRenderSoon, { once: true })
-      : tryRenderSoon();
+    // ---- OBSERVER: игнорим свои мутации ----
+    const observer = new MutationObserver((muts) => {
+      if (MUTATE_LOCK > 0) return;
+      const wrap = document.querySelector('.ds-wrap');
+      const onlyOurs = muts.every(m => {
+        const t = m.target;
+        if (!(t instanceof Node)) return false;
+        if (pill.contains(t)) return true;
+        if (wrap && wrap.contains(t)) return true;
+        if (t.nodeType === 1 && t.hasAttribute && t.hasAttribute(HIDDEN_ATTR)) return true;
+        return false;
+      });
+      if (onlyOurs) return;
+      scheduleRender(150);
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+
+    function scheduleRender(delay=80) {
+      clearTimeout(renderTimer);
+      renderTimer = setTimeout(() => renderTable(), delay);
+    }
+
+    // initial
+    setPill('ready');
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => scheduleRender(200), { once: true });
+    } else {
+      scheduleRender(200);
+    }
   });
 })();
