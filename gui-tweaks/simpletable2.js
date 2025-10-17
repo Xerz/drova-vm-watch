@@ -1,0 +1,365 @@
+// content.js — stable (no flicker): Tabulator (if allowed) or native table with smart updates
+(() => {
+  const inject = (fn) => {
+    const s = document.createElement('script');
+    s.textContent = '(' + fn.toString() + ')();';
+    (document.documentElement || document.head).appendChild(s);
+    s.remove();
+  };
+
+  inject(function main() {
+    'use strict';
+
+    // ---- CONFIG ----
+    const TITLE_TEXT = /Играли на ваших станциях/i;
+    const API_RE = /\/session-manager\/sessions(?:\?|$)/i;
+    const HIDDEN_ATTR = 'data-ds-hidden-original';
+
+    // ---- STATE ----
+    let lastSessions = null;
+    let lastSig = '';
+    let renderTimer = null;
+    let MUTATE_LOCK = 0;
+    let tabulatorLoaded = false;
+    let tableInstance = null;     // Tabulator instance
+    let hiddenNodesCache = [];    // оригинальные карточки, которые мы спрятали
+
+    // ---- STATUS PILL ----
+    const pill = document.createElement('div');
+    pill.id = 'ds-pill';
+    const pillCSS = document.createElement('style');
+    pillCSS.textContent = `
+      #ds-pill{position:fixed;right:8px;bottom:8px;z-index:999999;background:rgba(0,0,0,.75);
+        color:#fff;font:12px/1.2 system-ui,Arial,sans-serif;padding:6px 8px;border-radius:8px}
+      .ds-wrap{margin-top:8px}
+      .ds-toolbar{display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap}
+      .ds-toolbar button{padding:6px 10px;border:1px solid rgba(0,0,0,.15);border-radius:6px;background:#f7f7f7;cursor:pointer}
+      .ds-native{width:100%;border-collapse:collapse;table-layout:auto}
+      .ds-native th,.ds-native td{border:1px solid rgba(0,0,0,.12);padding:6px 8px;font-size:12px;vertical-align:top;word-break:break-word}
+      .ds-native thead th{position:sticky;top:0;background:#fff}
+    `;
+    withLock(() => {
+      (document.head || document.documentElement).appendChild(pillCSS);
+      (document.body || document.documentElement).appendChild(pill);
+    });
+    const setPill = (msg) => withLock(() => pill.textContent = 'DS: ' + msg);
+
+    // ---- HELPERS ----
+    function withLock(fn) { MUTATE_LOCK++; try { return fn(); } finally { MUTATE_LOCK--; } }
+
+    function findSectionHeaderRow(root=document) {
+      const headings = Array.from(root.querySelectorAll('h2,h3,h4'));
+      const h = headings.find(el => TITLE_TEXT.test(el.textContent || ''));
+      if (!h) return null;
+      return h.closest('.ivu-row.ivu-row-flex') || h.parentElement;
+    }
+    function isHeaderRow(el) {
+      if (!el) return false;
+      const head = el.querySelector(':scope h2, :scope h3, :scope h4');
+      return !!head && TITLE_TEXT.test(head.textContent || '');
+    }
+    function ensureWrap(headerRow) {
+      if (!headerRow) return null;
+      let wrap = headerRow.nextElementSibling;
+      if (wrap?.classList?.contains('ds-wrap')) return wrap;
+      withLock(() => {
+        wrap = document.createElement('div');
+        wrap.className = 'ds-wrap';
+        headerRow.after(wrap);
+      });
+      return wrap;
+    }
+
+    // спрячем «карточные» ноды после заголовка один раз; помечаем атрибутом
+    function hideOriginalAfter(headerRow) {
+      if (!headerRow) return;
+      let node = headerRow.nextElementSibling;
+      const toHide = [];
+      while (node) {
+        if (isHeaderRow(node)) break; // следующая секция
+        if (node.classList?.contains('ds-wrap')) { node = node.nextElementSibling; continue; }
+        if (node.nodeType === 1) toHide.push(node);
+        node = node.nextElementSibling;
+      }
+      withLock(() => {
+        toHide.forEach(n => {
+          if (!n.hasAttribute(HIDDEN_ATTR)) {
+            n.setAttribute(HIDDEN_ATTR, '1');
+            if (n.style.display !== 'none') n.style.display = 'none';
+            hiddenNodesCache.push(n);
+          }
+        });
+      });
+    }
+
+    function loadCSS(href) {
+      return new Promise((res, rej) => {
+        const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = href;
+        l.onload = res; l.onerror = rej; document.head.appendChild(l);
+      });
+    }
+    function loadJS(src) {
+      return new Promise((res, rej) => {
+        const s = document.createElement('script'); s.src = src; s.async = true;
+        s.onload = res; s.onerror = rej; document.head.appendChild(s);
+      });
+    }
+    async function ensureTabulator() {
+      if (tabulatorLoaded) return true;
+      try {
+        await loadCSS('https://cdn.jsdelivr.net/npm/tabulator-tables@5.6.2/dist/css/tabulator.min.css');
+        await loadJS('https://cdn.jsdelivr.net/npm/tabulator-tables@5.6.2/dist/js/tabulator.min.js');
+        if (window.Tabulator) { tabulatorLoaded = true; return true; }
+      } catch(_) {}
+      return false;
+    }
+
+    function collectColumns(rows) {
+      const set = new Set();
+      rows.forEach(r => Object.keys(r || {}).forEach(k => set.add(k)));
+      const preferred = ['uuid','client_id','server_id','merchant_id','product_id','created_on','finished_on','creator_ip','abort_comment','billing_type','status'];
+      const rest = Array.from(set).filter(k => !preferred.includes(k)).sort();
+      return preferred.filter(k => set.has(k)).concat(rest);
+    }
+
+    // простая сигнатура данных, чтобы не перерисовывать зря
+    function dataSig(rows) {
+      if (!Array.isArray(rows)) return '0';
+      const n = rows.length;
+      let h = 0 >>> 0;
+      const step = Math.max(1, Math.ceil(n / 20)); // семплим до 20 строк
+      for (let i = 0; i < n; i += step) {
+        const s = rows[i] || {};
+        const key = (s.uuid||'') + '|' + (s.created_on||'') + '|' + (s.finished_on||'') + '|' + (s.status||'');
+        for (let j = 0; j < key.length; j++) h = ((h * 31) + key.charCodeAt(j)) >>> 0;
+      }
+      return n + ':' + h.toString(16);
+    }
+
+    // ---- RENDER ----
+    async function renderTable(sessions) {
+      const sig = dataSig(sessions);
+      if (sig === lastSig) { setPill('no changes'); return; }
+      lastSig = sig;
+
+      const headerRow = findSectionHeaderRow();
+      if (!headerRow) { setPill('waiting header'); return; }
+      const wrap = ensureWrap(headerRow);
+      hideOriginalAfter(headerRow);
+
+      // toolbar
+      let toolbar = wrap.querySelector('.ds-toolbar');
+      if (!toolbar) {
+        withLock(() => {
+          toolbar = document.createElement('div');
+          toolbar.className = 'ds-toolbar';
+          toolbar.innerHTML = `
+            <button data-act="csv">Export CSV</button>
+            <button data-act="clear">Clear filters</button>
+            <span style="opacity:.7;font-size:12px">если Tabulator запрещён CSP — будет нативная таблица</span>
+          `;
+          wrap.prepend(toolbar);
+          toolbar.addEventListener('click', (e) => {
+            const btn = e.target.closest('button[data-act]'); if (!btn) return;
+            if (btn.dataset.act === 'csv') {
+              if (tableInstance?.download) tableInstance.download('csv', 'drova-sessions.csv');
+              else downloadCSVNative(sessions);
+            }
+            if (btn.dataset.act === 'clear') tableInstance?.clearHeaderFilter?.();
+          });
+        });
+      }
+
+      // holder
+      let holder = wrap.querySelector('#ds-holder');
+      if (!holder) {
+        withLock(() => {
+          holder = document.createElement('div');
+          holder.id = 'ds-holder';
+          holder.style.minHeight = '320px';
+          wrap.appendChild(holder);
+        });
+      }
+
+      // Tabulator if possible
+      if (await ensureTabulator()) {
+        const cols = collectColumns(sessions).map(k => ({
+          title: k, field: k,
+          headerFilter: 'input',
+          headerFilterPlaceholder: 'фильтр…',
+          formatter: (cell) => {
+            const v = cell.getValue();
+            return (v == null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+          }
+        }));
+        if (!tableInstance) {
+          withLock(() => {
+            tableInstance = new window.Tabulator(holder, {
+              data: sessions,
+              columns: cols,
+              layout: "fitDataStretch",
+              height: "520px",
+              pagination: true,
+              paginationMode: "local",
+              paginationSize: 25,
+              movableColumns: true,
+              selectable: false,
+              initialSort: [{ column: "created_on", dir: "desc" }],
+            });
+          });
+        } else {
+          // обновление без пересоздания DOM
+          const current = tableInstance.getColumns().map(c => c.getField());
+          const want = cols.map(c => c.field);
+          const sameCols = current.length === want.length && current.every((f,i)=>f===want[i]);
+          withLock(() => {
+            if (!sameCols) tableInstance.setColumns(cols);
+            tableInstance.replaceData(sessions);
+          });
+        }
+        setPill(`Tabulator: ${sessions.length} rows`);
+        return;
+      }
+
+      // fallback: native table — обновляем только tbody
+      setPill('native table');
+      renderNativeTable(holder, sessions);
+    }
+
+    function renderNativeTable(holder, sessions) {
+      const cols = collectColumns(sessions);
+      let table = holder.querySelector('table.ds-native');
+      if (!table) {
+        withLock(() => {
+          table = document.createElement('table');
+          table.className = 'ds-native';
+          const thead = document.createElement('thead');
+          const trh = document.createElement('tr');
+          cols.forEach(c => { const th = document.createElement('th'); th.textContent = c; trh.appendChild(th); });
+          thead.appendChild(trh);
+          const tbody = document.createElement('tbody');
+          table.appendChild(thead); table.appendChild(tbody);
+          holder.innerHTML = ''; holder.appendChild(table);
+        });
+      } else {
+        // если состав колонок изменился — перестраиваем только thead (редко)
+        const currentCols = Array.from(table.tHead.rows[0].cells).map(th => th.textContent);
+        const needCols = cols.join('|'), haveCols = currentCols.join('|');
+        if (needCols !== haveCols) {
+          withLock(() => {
+            const trh = document.createElement('tr');
+            cols.forEach(c => { const th = document.createElement('th'); th.textContent = c; trh.appendChild(th); });
+            table.tHead.replaceChildren(trh);
+          });
+        }
+      }
+      // перерисовка tbody (одна операция replaceChildren ⇒ минимум мутаций)
+      const tbody = table.tBodies[0];
+      const frag = document.createDocumentFragment();
+      for (const row of sessions) {
+        const tr = document.createElement('tr');
+        for (const c of cols) {
+          const td = document.createElement('td');
+          const v = row?.[c];
+          td.textContent = (v == null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+          tr.appendChild(td);
+        }
+        frag.appendChild(tr);
+      }
+      withLock(() => { tbody.replaceChildren(frag); });
+    }
+
+    function downloadCSVNative(rows) {
+      const cols = collectColumns(rows);
+      const esc = (x) => {
+        const s = (x == null) ? '' : String(x);
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+      };
+      const csv = [cols.map(esc).join(',')].concat(
+        rows.map(r => cols.map(c => {
+          const v = r?.[c];
+          return esc(typeof v === 'object' ? JSON.stringify(v) : v);
+        }).join(','))
+      ).join('\n');
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'drova-sessions.csv';
+      a.click(); URL.revokeObjectURL(a.href);
+    }
+
+    // ---- API HOOKS ----
+    const origFetch = window.fetch;
+    window.fetch = async function patchedFetch(...args) {
+      const res = await origFetch.apply(this, args);
+      try {
+        const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+        if (API_RE.test(url)) {
+          const clone = res.clone();
+          const ct = (clone.headers.get('content-type') || '').toLowerCase();
+          let json;
+          if (ct.includes('application/json')) json = await clone.json();
+          else { const t = await clone.text(); try { json = JSON.parse(t); } catch {} }
+          if (Array.isArray(json?.sessions)) {
+            lastSessions = json.sessions;
+            scheduleRender(60);
+            setPill(`payload:${lastSessions.length}`);
+          }
+        }
+      } catch(_) { setPill('fetch err'); }
+      return res;
+    };
+
+    const OrigXHR = window.XMLHttpRequest;
+    window.XMLHttpRequest = function PatchedXHR() {
+      const xhr = new OrigXHR();
+      let _url = '';
+      const _open = xhr.open;
+      xhr.open = function (method, url) { _url = url; return _open.apply(this, arguments); };
+      xhr.addEventListener('load', function () {
+        try {
+          if (!API_RE.test(_url)) return;
+          const ct = (xhr.getResponseHeader('content-type') || '').toLowerCase();
+          if (ct.includes('application/json')) {
+            const json = JSON.parse(xhr.responseText);
+            if (Array.isArray(json?.sessions)) {
+              lastSessions = json.sessions;
+              scheduleRender(60);
+              setPill(`payload:${lastSessions.length}`);
+            }
+          }
+        } catch(_) { setPill('xhr err'); }
+      });
+      return xhr;
+    };
+
+    // ---- OBSERVER: игнорим наши мутации (wrap/pill/hidden originals) ----
+    const observer = new MutationObserver((muts) => {
+      if (MUTATE_LOCK > 0) return;
+      const wrap = document.querySelector('.ds-wrap');
+      const onlyOurs = muts.every(m => {
+        const t = m.target;
+        if (!(t instanceof Node)) return false;
+        if (pill.contains(t)) return true;
+        if (wrap && wrap.contains(t)) return true;
+        if (t.nodeType === 1 && t.hasAttribute && t.hasAttribute(HIDDEN_ATTR)) return true;
+        return false;
+      });
+      if (onlyOurs) return;
+      scheduleRender(150);
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+
+    function scheduleRender(delay=80) {
+      if (!lastSessions) return;
+      clearTimeout(renderTimer);
+      renderTimer = setTimeout(() => renderTable(lastSessions), delay);
+    }
+
+    // initial
+    setPill('ready');
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => scheduleRender(200), { once: true });
+    } else {
+      scheduleRender(200);
+    }
+  });
+})();
