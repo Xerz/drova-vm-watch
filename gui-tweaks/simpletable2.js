@@ -40,22 +40,123 @@
     let MUTATE_LOCK = 0;
     let tableInstance = null;
     let hiddenNodesCache = [];
-    let humanOnly = false; // <— режим показа
+    let humanOnly = true; // <— режим показа
 
     // ---- STATUS PILL ----
     const pill = document.createElement('div');
     pill.id = 'ds-pill';
     const pillCSS = document.createElement('style');
     pillCSS.textContent = `
-      #ds-pill{position:fixed;right:8px;bottom:8px;z-index:999999;background:rgba(0,0,0,.75);
-        color:#fff;font:12px/1.2 system-ui,Arial,sans-serif;padding:6px 8px;border-radius:8px}
-      .ds-wrap{margin-top:8px}
-      .ds-toolbar{display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap}
-      .ds-toolbar button{padding:6px 10px;border:1px solid rgba(0,0,0,.15);border-radius:6px;background:#f7f7f7;cursor:pointer}
-      .ds-native{width:100%;border-collapse:collapse;table-layout:auto}
-      .ds-native th,.ds-native td{border:1px solid rgba(0,0,0,.12);padding:6px 8px;font-size:12px;vertical-align:top;word-break:break-word}
-      .ds-native thead th{position:sticky;top:0;background:#fff}
+      /* debug pill */
+      #ds-pill{
+        position:fixed;right:8px;bottom:8px;z-index:999999;
+        background:#0b0c0f;color:#e5e7eb;
+        font:12px/1.2 system-ui,Arial,sans-serif;
+        padding:6px 8px;border-radius:8px;
+        box-shadow:0 4px 18px rgba(0,0,0,.4); border:1px solid #1f2937;
+      }
+
+      /* our wrapper */
+      .ds-wrap{
+        margin-top:8px;
+        background:#0f1115;
+        color:#e5e7eb;
+        border:1px solid #1f2937;
+        border-radius:10px;
+        padding:8px;
+      }
+
+      /* toolbar */
+      .ds-toolbar{
+        display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap
+      }
+      .ds-toolbar button{
+        padding:6px 10px;border-radius:8px;
+        background:#111827;color:#e5e7eb;
+        border:1px solid #374151; cursor:pointer;
+        transition:background .15s ease,border-color .15s ease,transform .02s ease;
+      }
+      .ds-toolbar button:hover{ background:#0b1220; border-color:#4b5563; }
+      .ds-toolbar button:active{ transform:translateY(1px); }
+      .ds-toolbar span{ color:#9ca3af; }
+
+      /* fallback native table (dark) */
+      .ds-native{
+        width:100%; border-collapse:collapse; table-layout:auto;
+        background:#0f1115; color:#e5e7eb;
+      }
+      .ds-native th,.ds-native td{
+        border:1px solid #1f2430; padding:6px 8px; font-size:12px;
+        vertical-align:top; word-break:break-word;
+      }
+      .ds-native thead th{
+        position:sticky; top:0; background:#111317; color:#e5e7eb;
+        border-bottom:1px solid #2a2f3a; z-index:1;
+      }
+      .ds-native tbody tr:nth-child(even){ background:#0d0f13; }
+      .ds-native tbody tr:hover{ background:#1a1f2a; }
     `;
+    const dsTabDark = document.createElement('style');
+    dsTabDark.textContent = `
+      /* Tabulator dark overrides (scoped to our wrapper) */
+      .ds-wrap .tabulator{
+        background:#0f1115; color:#e5e7eb; border:1px solid #1f2937; border-radius:8px;
+      }
+
+      /* Шапка и ячейки шапки */
+      .ds-wrap .tabulator .tabulator-header{
+        background:#111317 !important;
+        border-bottom:1px solid #2a2f3a !important;
+      }
+      .ds-wrap .tabulator .tabulator-header .tabulator-col{
+        background:#111317 !important;
+        border-right:1px solid #1f2430 !important;
+      }
+      .ds-wrap .tabulator .tabulator-header .tabulator-col .tabulator-col-content{
+        background:#111317 !important;
+      }
+      .ds-wrap .tabulator .tabulator-col-title,
+      .ds-wrap .tabulator .tabulator-col-title-holder{
+        color:#e5e7eb !important;
+      }
+
+      /* Ховер по заголовкам */
+      .ds-wrap .tabulator .tabulator-header .tabulator-col:hover{
+        background:#0f141f !important;
+      }
+
+      /* Фильтры в шапке */
+      .ds-wrap .tabulator .tabulator-header-filter input,
+      .ds-wrap .tabulator .tabulator-header-filter select{
+        background:#0b0d11 !important; color:#e5e7eb !important;
+        border:1px solid #374151 !important; border-radius:6px; padding:4px 6px;
+      }
+
+      /* Тело */
+      .ds-wrap .tabulator .tabulator-tableholder{ background:#0f1115; }
+      .ds-wrap .tabulator .tabulator-row{
+        background:#111317; border-bottom:1px solid #1f2430;
+      }
+      .ds-wrap .tabulator .tabulator-row:nth-child(even){ background:#0d0f13; }
+      .ds-wrap .tabulator .tabulator-row:hover{ background:#1a1f2a; }
+      .ds-wrap .tabulator .tabulator-cell{
+        border-right:1px solid #1f2430; color:#e5e7eb;
+      }
+
+      /* Футер/пагинация */
+      .ds-wrap .tabulator .tabulator-footer{
+        background:#0f1115; color:#d1d5db; border-top:1px solid #2a2f3a;
+      }
+      .ds-wrap .tabulator .tabulator-paginator{ color:#d1d5db; }
+      .ds-wrap .tabulator .tabulator-page{
+        background:#111827; color:#e5e7eb; border:1px solid #374151; border-radius:6px;
+      }
+      .ds-wrap .tabulator .tabulator-page:hover{ background:#0b1220; border-color:#4b5563; }
+      .ds-wrap .tabulator .tabulator-page.active{ background:#1f2937; border-color:#4b5563; }
+
+    `;
+    (document.head || document.documentElement).appendChild(dsTabDark);
+
     withLock(() => {
       (document.head || document.documentElement).appendChild(pillCSS);
       (document.body || document.documentElement).appendChild(pill);
@@ -269,9 +370,9 @@
             <button data-act="toggle-human">Human columns: Off</button>
             <button data-act="csv">Export CSV</button>
             <button data-act="clear">Clear filters</button>
-            <span style="opacity:.7;font-size:12px">${CDNJS.name} (если CSP не пустит — нативная таблица)</span>
           `;
           wrap.prepend(toolbar);
+          updateHumanButton(toolbar);
           toolbar.addEventListener('click', (e) => {
             const btn = e.target.closest('button[data-act]'); if (!btn) return;
             if (btn.dataset.act === 'toggle-human') {
