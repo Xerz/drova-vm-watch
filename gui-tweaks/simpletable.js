@@ -1,4 +1,4 @@
-// content.js — Drova sessions → Tabulator 6.3.1 (cdnjs) + server_name + product_name + useDefaultDesktop
+// content.js — Drova sessions → Tabulator 6.3.1 (cdnjs) + server_name/product_name/useDefaultDesktop + *_human
 (() => {
   const inject = (fn) => {
     const s = document.createElement('script');
@@ -24,10 +24,10 @@
     };
 
     // ---- STATE ----
-    let rawSessions = null;            // исходный массив sessions[]
+    let rawSessions = null;            // sessions[]
     let serverNames = {};              // { server_id: server_name }
     let productsById = {};             // { productId: productObj }
-    let lastSig = '';                  // сигнатура данных для защиты от лишних ререндеров
+    let lastSig = '';
     let renderTimer = null;
     let MUTATE_LOCK = 0;
     let tableInstance = null;
@@ -55,6 +55,28 @@
 
     // ---- HELPERS ----
     function withLock(fn) { MUTATE_LOCK++; try { return fn(); } finally { MUTATE_LOCK--; } }
+
+    function tsToHuman(ts) {
+      if (ts == null) return '';
+      const d = new Date(Number(ts));
+      if (isNaN(d.getTime())) return '';
+      const Y = d.getFullYear();
+      const M = String(d.getMonth()+1).padStart(2,'0');
+      const D = String(d.getDate()).padStart(2,'0');
+      const h = String(d.getHours()).padStart(2,'0');
+      const m = String(d.getMinutes()).padStart(2,'0');
+      const s = String(d.getSeconds()).padStart(2,'0');
+      return `${Y}-${M}-${D} ${h}:${m}:${s}`;  // локальное время браузера
+    }
+    function msToHumanDuration(ms) {
+      if (!(ms > 0)) return '';
+      let sec = Math.floor(ms / 1000);
+      const h = Math.floor(sec / 3600); sec -= h*3600;
+      const m = Math.floor(sec / 60);   const s = sec - m*60;
+      return h > 0
+        ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+        : `${m}:${String(s).padStart(2,'0')}`;
+    }
 
     function findSectionHeaderRow(root=document) {
       const headings = Array.from(root.querySelectorAll('h2,h3,h4'));
@@ -84,7 +106,7 @@
       let node = headerRow.nextElementSibling;
       const toHide = [];
       while (node) {
-        if (isHeaderRow(node)) break; // следующая секция
+        if (isHeaderRow(node)) break;
         if (node.classList?.contains('ds-wrap')) { node = node.nextElementSibling; continue; }
         if (node.nodeType === 1) toHide.push(node);
         node = node.nextElementSibling;
@@ -112,34 +134,29 @@
         s.onload = res; s.onerror = rej; document.head.appendChild(s);
       });
     }
-
     async function ensureTabulator() {
       if (window.Tabulator) return { ok: true, where: 'present' };
       try {
-        setPill(`load ${CDNJS.name}: css`);
-        await loadCSS(CDNJS.css);
-        setPill(`load ${CDNJS.name}: js`);
-        await loadJS(CDNJS.js);
-      } catch (e) {
-        return { ok: false, reason: e?.message || 'load error' };
-      }
-      if (window.Tabulator) return { ok: true, where: CDNJS.name };
-      return { ok: false, reason: 'loaded but window.Tabulator missing' };
+        setPill(`load ${CDNJS.name}: css`); await loadCSS(CDNJS.css);
+        setPill(`load ${CDNJS.name}: js`);  await loadJS(CDNJS.js);
+      } catch (e) { return { ok:false, reason:e?.message||'load error' }; }
+      return window.Tabulator ? { ok:true, where:CDNJS.name } : { ok:false, reason:'no window.Tabulator' };
     }
 
-    // колонкам задаём приоритет и убираем merchant_id
+    // --- columns: without merchant_id + new *_human fields near originals ---
     function collectColumns(rows) {
       const set = new Set();
       rows.forEach(r => Object.keys(r || {}).forEach(k => set.add(k)));
-      set.delete('merchant_id'); // 1) убрать merchant_id
+      set.delete('merchant_id');
 
-      // желаемый порядок
       const preferred = [
         'uuid','status',
         'client_id',
-        'server_id','server_name',             // 2) server_name
-        'product_id','product_name','useDefaultDesktop', // 3-4) из продуктов
-        'created_on','finished_on',
+        'server_id','server_name',
+        'product_id','product_name','useDefaultDesktop',
+        'created_on','created_on_human',
+        'finished_on','finished_on_human',
+        'duration_human',
         'creator_ip',
         'abort_comment',
         'billing_type'
@@ -148,25 +165,25 @@
       return preferred.filter(k => set.has(k)).concat(rest);
     }
 
-    // гашим «лишние» перерисовки: включаем в сигнатуру и карты имён/продуктов
+    // signatures for minimal re-renders
     function mapSig(obj) {
       const keys = Object.keys(obj || {}).sort();
       let h = 0 >>> 0;
       for (let i = 0; i < keys.length; i += Math.max(1, Math.ceil(keys.length/50))) {
         const k = keys[i], v = obj[k];
         const s = k + '|' + (typeof v === 'string' ? v : JSON.stringify(v)?.slice(0,64));
-        for (let j = 0; j < s.length; j++) h = ((h * 31) + s.charCodeAt(j)) >>> 0;
+        for (let j=0;j<s.length;j++) h = ((h*31) + s.charCodeAt(j)) >>> 0;
       }
       return keys.length + ':' + h.toString(16);
     }
     function sessionsSig(rows) {
       if (!Array.isArray(rows)) return '0';
       const n = rows.length; let h = 0 >>> 0;
-      const step = Math.max(1, Math.ceil(n / 20));
-      for (let i = 0; i < n; i += step) {
+      const step = Math.max(1, Math.ceil(n/20));
+      for (let i=0;i<n;i+=step) {
         const s = rows[i] || {};
         const key = (s.uuid||'') + '|' + (s.created_on||'') + '|' + (s.finished_on||'') + '|' + (s.status||'');
-        for (let j = 0; j < key.length; j++) h = ((h * 31) + key.charCodeAt(j)) >>> 0;
+        for (let j=0;j<key.length;j++) h = ((h*31) + key.charCodeAt(j)) >>> 0;
       }
       return n + ':' + h.toString(16);
     }
@@ -174,18 +191,27 @@
       return [ sessionsSig(rawSessions||[]), mapSig(serverNames), mapSig(productsById) ].join('~');
     }
 
-    // обогащаем строки из sessions дополнительными полями и убираем merchant_id
+    // --- build augmented rows with *_human ---
     function buildAugmentedRows() {
       const src = Array.isArray(rawSessions) ? rawSessions : [];
       return src.map(s => {
         const p = productsById[s.product_id] || null;
+        const created_on_human  = tsToHuman(s.created_on);
+        const finished_on_human = tsToHuman(s.finished_on);
+        const duration_human    = (s.created_on != null && s.finished_on != null)
+          ? msToHumanDuration(Number(s.finished_on) - Number(s.created_on))
+          : ''; // для ACTIVE/без finished_on не считаем «живую» длительность
+
         const obj = {
           ...s,
           server_name: serverNames[s.server_id] || '',
           product_name: p?.title || '',
-          useDefaultDesktop: (p?.useDefaultDesktop ?? null)
+          useDefaultDesktop: (p?.useDefaultDesktop ?? null),
+          created_on_human,
+          finished_on_human,
+          duration_human,
         };
-        delete obj.merchant_id; // 1) убрать merchant_id
+        delete obj.merchant_id;
         return obj;
       });
     }
@@ -238,7 +264,7 @@
         });
       }
 
-      // пробуем Tabulator
+      // Tabulator
       const diag = await ensureTabulator();
       window.__DS_TABULATOR_DIAG__ = diag;
       if (diag.ok) {
@@ -251,7 +277,6 @@
             return (v == null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
           }
         }));
-
         if (!tableInstance) {
           withLock(() => {
             tableInstance = new window.Tabulator(holder, {
@@ -368,7 +393,6 @@
           if (json && typeof json === 'object' && !Array.isArray(json)) {
             serverNames = { ...serverNames, ...json };
             setPill(`server_names:${Object.keys(serverNames).length}`);
-            // форс-перерисовку (сигнатура изменится)
             scheduleRender(40);
           }
         } else if (PRODUCTS_RE.test(url)) {
@@ -433,7 +457,7 @@
       return xhr;
     };
 
-    // ---- OBSERVER: игнорим свои мутации ----
+    // ---- OBSERVER ----
     const observer = new MutationObserver((muts) => {
       if (MUTATE_LOCK > 0) return;
       const wrap = document.querySelector('.ds-wrap');
