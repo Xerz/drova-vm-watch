@@ -25,10 +25,9 @@
 
     // Какие столбцы показывать в «human-only» режиме
     const HUMAN_COLUMNS = [
-      'server_name','product_name',
-      'created_on_human','finished_on_human','duration_human',
-      'creator_ip','billing_type','client_sessions','client_avg_duration_human', 'client_total_duration_human',
-      'score','score_text', 'client_id'
+      'client_id','creator_ip','product_name','server_name','created_on_human','duration_human',
+      'billing_type','client_sessions','client_avg_duration_human', 'client_total_duration_human',
+      'finished_on_human','score','score_text',
     ];
 
     // ---- STATE ----
@@ -445,7 +444,7 @@
       const cols = getColumns(sessions);
       if (diag.ok) {
         const tabCols = cols.map(k => ({
-          title: k, field: k,
+          title: k, field: k, width: 120,
           headerFilter: 'input',
           headerFilterPlaceholder: 'фильтр…',
           formatter: (cell) => {
