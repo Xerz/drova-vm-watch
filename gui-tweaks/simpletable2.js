@@ -27,8 +27,8 @@
     const HUMAN_COLUMNS = [
       'server_name','product_name',
       'created_on_human','finished_on_human','duration_human',
-      'creator_ip','billing_type',
-      'score','score_reason','score_text'
+      'creator_ip','billing_type','client_sessions','client_avg_duration_human', 'client_total_duration_human',
+      'score','score_text'
     ];
 
     // ---- STATE ----
@@ -200,6 +200,14 @@
                    : `${m}:${String(s).padStart(2,'0')}`;
     }
 
+    function humanDurationToSeconds(str) {
+      if (!str) return 0;
+      const parts = str.split(':').map(Number);
+      if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+      if (parts.length === 2) return parts[0] * 60 + parts[1];
+      return Number(str) || 0;
+    }
+
     function findSectionHeaderRow(root=document) {
       const headings = Array.from(root.querySelectorAll('h2,h3,h4'));
       const h = headings.find(el => TITLE_TEXT.test(el.textContent || ''));
@@ -324,14 +332,38 @@
 
     // обогащаем строки
     function buildAugmentedRows() {
-      const src = Array.isArray(rawSessions) ? rawSessions : [];
-      return src.map(s => {
+      const src = Array.isArray(rawSessions) ? rawSessions.slice() : [];
+
+      // Accumulate durations and counts per client
+      const clientStats = {};
+      src.forEach(s => {
+        if (s.created_on != null && s.finished_on != null) {
+          const dur = Number(s.finished_on) - Number(s.created_on);
+          if (!clientStats[s.client_id]) {
+            clientStats[s.client_id] = { total: 0, count: 0 };
+          }
+          clientStats[s.client_id].total += dur;
+          clientStats[s.client_id].count += 1;
+        }
+      });
+
+      // Count sessions per client_id
+      const clientCounts = {};
+      src.forEach(s => {
+        clientCounts[s.client_id] = (clientCounts[s.client_id] || 0) + 1;
+      });
+
+      // Add stats to each row
+      const augmented = src.map(s => {
         const p = productsById[s.product_id] || null;
         const created_on_human  = tsToHuman(s.created_on);
         const finished_on_human = tsToHuman(s.finished_on);
         const duration_human    = (s.created_on != null && s.finished_on != null)
           ? msToHumanDuration(Number(s.finished_on) - Number(s.created_on))
           : '';
+        const stats = clientStats[s.client_id] || { total: 0, count: 0 };
+        const client_avg_duration_human = stats.count > 0 ? msToHumanDuration(stats.total / stats.count) : '';
+        const client_total_duration_human = stats.total > 0 ? msToHumanDuration(stats.total) : '';
         const obj = {
           ...s,
           server_name: serverNames[s.server_id] || '',
@@ -340,12 +372,18 @@
           created_on_human,
           finished_on_human,
           duration_human,
+          client_sessions: clientCounts[s.client_id],
+          client_avg_duration_human,
+          client_total_duration_human
         };
         delete obj.merchant_id;
         return obj;
       });
+
+      return augmented;
     }
 
+    let tableBuilt = false;
     // ---- RENDER ----
     async function renderTable() {
       const sig = fullSig();
@@ -382,10 +420,7 @@
               lastSig = '';
               scheduleRender(0);
             }
-            if (btn.dataset.act === 'csv') {
-              if (tableInstance?.download) tableInstance.download('csv', 'drova-sessions.csv');
-              else downloadCSVNative(sessions);
-            }
+            if (btn.dataset.act === 'csv') tableInstance.download('csv', 'drova-sessions.csv');
             if (btn.dataset.act === 'clear') tableInstance?.clearHeaderFilter?.();
           });
         });
@@ -416,8 +451,17 @@
           formatter: (cell) => {
             const v = cell.getValue();
             return (v == null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
-          }
+          },
+          // Add custom sorter for duration columns
+          sorter: ['duration_human', 'client_avg_duration_human', 'client_total_duration_human'].includes(k)
+            ? (a, b) => humanDurationToSeconds(a) - humanDurationToSeconds(b)
+            : undefined
         }));
+      if (tableInstance) {
+        tableInstance.destroy();
+        tableInstance = null;
+        tableBuilt = false;
+      }
         if (!tableInstance) {
           withLock(() => {
             tableInstance = new window.Tabulator(holder, {
@@ -429,25 +473,58 @@
               paginationSize: 25,
               movableColumns: true,
               selectable: false,
-              initialSort: [{ column: "created_on", dir: "desc" }],
+              tableBuilt: function() { tableBuilt = true; }
             });
+            tableInstance.on("dataFiltered", function(filters, rows) {
+                  // Get filtered data
+                  console.log('dataFiltered triggered', filters, rows);
+                  const filteredData = rows.map(row => row.getData());
+
+                  // Recalculate stats per client_id
+                  const clientStats = {};
+                  filteredData.forEach(s => {
+                    if (s.created_on != null && s.finished_on != null) {
+                      const dur = Number(s.finished_on) - Number(s.created_on);
+                      if (!clientStats[s.client_id]) {
+                        clientStats[s.client_id] = { total: 0, count: 0 };
+                      }
+                      clientStats[s.client_id].total += dur;
+                      clientStats[s.client_id].count += 1;
+                    }
+                  });
+
+                  // Count sessions per client_id
+                  const clientCounts = {};
+                  filteredData.forEach(s => {
+                    clientCounts[s.client_id] = (clientCounts[s.client_id] || 0) + 1;
+                  });
+
+                  // Update each row
+                  rows.forEach(row => {
+                    const s = row.getData();
+                    const stats = clientStats[s.client_id] || { total: 0, count: 0 };
+                    row.update({
+                      client_sessions: clientCounts[s.client_id] || 0,
+                      client_avg_duration_human: stats.count > 0 ? msToHumanDuration(stats.total / stats.count) : '',
+                      client_total_duration_human: stats.total > 0 ? msToHumanDuration(stats.total) : ''
+                    });
+                  });
+                });
           });
         } else {
-          const current = tableInstance.getColumns().map(c => c.getField());
-          const want = tabCols.map(c => c.field);
-          const sameCols = current.length === want.length && current.every((f,i)=>f===want[i]);
-          withLock(() => {
-            if (!sameCols) tableInstance.setColumns(tabCols);
-            tableInstance.replaceData(sessions);
-          });
+          if (tableBuilt) {
+            const current = tableInstance.getColumns().map(c => c.getField());
+            const want = tabCols.map(c => c.field);
+            const sameCols = current.length === want.length && current.every((f,i)=>f===want[i]);
+            withLock(() => {
+              if (!sameCols) tableInstance.setColumns(tabCols);
+              tableInstance.replaceData(sessions);
+            });
+          }
         }
         setPill(`Tabulator: ${sessions.length} rows${humanOnly ? ' (Human)' : ''}`);
         return;
       }
-
-      // fallback: native
-      setPill(`native table${humanOnly ? ' (Human)' : ''}${diag.reason ? ' — '+diag.reason : ''}`);
-      renderNativeTable(holder, sessions, cols);
     }
 
     function updateHumanButton(toolbar) {
@@ -455,62 +532,6 @@
       if (btn) btn.textContent = `Human columns: ${humanOnly ? 'On' : 'Off'}`;
     }
 
-    function renderNativeTable(holder, sessions, cols) {
-      let table = holder.querySelector('table.ds-native');
-      if (!table) {
-        withLock(() => {
-          table = document.createElement('table');
-          table.className = 'ds-native';
-          const thead = document.createElement('thead');
-          const trh = document.createElement('tr');
-          cols.forEach(c => { const th = document.createElement('th'); th.textContent = c; trh.appendChild(th); });
-          thead.appendChild(trh);
-          const tbody = document.createElement('tbody');
-          table.appendChild(thead); table.appendChild(tbody);
-          holder.innerHTML = ''; holder.appendChild(table);
-        });
-      } else {
-        const currentCols = Array.from(table.tHead.rows[0].cells).map(th => th.textContent);
-        const needCols = cols.join('|'), haveCols = currentCols.join('|');
-        if (needCols !== haveCols) {
-          withLock(() => {
-            const trh = document.createElement('tr');
-            cols.forEach(c => { const th = document.createElement('th'); th.textContent = c; trh.appendChild(th); });
-            table.tHead.replaceChildren(trh);
-          });
-        }
-      }
-      const tbody = holder.querySelector('table.ds-native tbody');
-      const frag = document.createDocumentFragment();
-      for (const row of sessions) {
-        const tr = document.createElement('tr');
-        for (const c of cols) {
-          const td = document.createElement('td');
-          const v = row?.[c];
-          td.textContent = (v == null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
-          tr.appendChild(td);
-        }
-        frag.appendChild(tr);
-      }
-      withLock(() => { tbody.replaceChildren(frag); });
-    }
-
-    function downloadCSVNative(rows) {
-      const cols = getColumns(rows);
-      const esc = (x) => {
-        const s = (x == null) ? '' : String(x);
-        return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
-      };
-      const csv = [cols.map(esc).join(',')].concat(
-        rows.map(r => cols.map(c => {
-          const v = r?.[c];
-          return esc(typeof v === 'object' ? JSON.stringify(v) : v);
-        }).join(','))
-      ).join('\n');
-      const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'drova-sessions.csv';
-      a.click(); URL.revokeObjectURL(a.href);
-    }
 
     // ---- API HOOKS (fetch) ----
     const origFetch = window.fetch;
