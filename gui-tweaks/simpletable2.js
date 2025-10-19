@@ -28,7 +28,7 @@
       'server_name','product_name',
       'created_on_human','finished_on_human','duration_human',
       'creator_ip','billing_type','client_sessions','client_avg_duration_human', 'client_total_duration_human',
-      'score','score_text'
+      'score','score_text', 'client_id'
     ];
 
     // ---- STATE ----
