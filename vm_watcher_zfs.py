@@ -116,7 +116,7 @@ def reset_vm(dom):
 def start_record(client: obs.ReqClient):
     client.start_record()  # StartRecord (v5). :contentReference[oaicite:13]{index=13}
     st = client.get_record_status()
-    logger.info(f"Recording: {st.output_path}")
+    logger.info(f"Recording: {st.output_timecode}")
 
 def stop_record_and_wait(client: obs.ReqClient):
     # StopRecord вернёт путь (в 5.x), но подождём гарантированно. :contentReference[oaicite:14]{index=14}
