@@ -116,7 +116,7 @@ def reset_vm(dom):
 def start_record(client: obs.ReqClient):
     client.start_record()  # StartRecord (v5). :contentReference[oaicite:13]{index=13}
     st = client.get_record_status()
-    logger.info(f"Recording: {st.output_active}")
+    logger.info(f"Recording: {st.output_path}")
 
 def stop_record_and_wait(client: obs.ReqClient):
     # StopRecord вернёт путь (в 5.x), но подождём гарантированно. :contentReference[oaicite:14]{index=14}
@@ -141,14 +141,7 @@ def main():
         logger.error(f"Виртуальная машина {VM_NAME} не найдена")
         return
 
-    try:
-        obs_client = obs.ReqClient(host=OBS_WS_HOST, port=OBS_WS_PORT, password=OBS_WS_PASSWORD)
-        obs_client.get_version()
-    except Exception as e:
-        logger.error(f"Не удалось подключиться к OBS WebSocket: {e}")
-        return
-
-    in_session = False
+    obs_client = None
 
     # Статусы активной сессии: ACTIVE_SESSION_STATUSES
     while True:
@@ -159,9 +152,12 @@ def main():
             if state in ACTIVE_SESSION_STATUSES:
                 logger.info(f"VM {VM_NAME} entered session state: {state}")
                 try:
+                    obs_client = obs.ReqClient(host=OBS_WS_HOST, port=OBS_WS_PORT, password=OBS_WS_PASSWORD)
+                    obs_client.get_version()
                     start_record(obs_client)
                 except Exception as e:
-                    logger.error(f"Ошибка при запуске записи в OBS: {e}")
+                    obs_client = None
+                    logger.error(f"Не удалось подключиться к OBS WebSocket и / или начать запись: {e}")
                 break
             if not waiting_msg_printed:
                 logger.info(f"Waiting for {ACTIVE_SESSION_STATUSES} (last session state: {state})")
@@ -181,10 +177,17 @@ def main():
                     reset_vm(dom)
                 except libvirt.libvirtError as e:
                     logger.error(f"Ошибка при перезагрузке: {e}")
-                try:
-                    stop_record_and_wait(obs_client)
-                except Exception as e:
-                    logger.error(f"Ошибка при остановке записи в OBS: {e}")
+                if obs_client:
+                    try:
+                        stop_record_and_wait(obs_client)
+                    except Exception as e:
+                        logger.error(f"Ошибка при остановке записи в OBS: {e}")
+                    finally:
+                        try:
+                            obs_client.close()
+                        except Exception as e:
+                            logger.error(f"Ошибка при закрытии OBS WebSocket: {e}")
+                        obs_client = None
                 break
             if not waiting_msg_printed:
                 logger.info(f"Waiting for not in {ACTIVE_SESSION_STATUSES} (current: {state})")
