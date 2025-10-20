@@ -156,8 +156,13 @@ def main():
                     obs_client.get_version()
                     start_record(obs_client)
                 except Exception as e:
-                    obs_client = None
                     logger.error(f"Не удалось подключиться к OBS WebSocket и / или начать запись: {e}")
+                finally:
+                    try:
+                        obs_client.close()
+                    except Exception as e:
+                        logger.error(f"Ошибка при закрытии OBS WebSocket: {e}")
+                    obs_client = None
                 break
             if not waiting_msg_printed:
                 logger.info(f"Waiting for {ACTIVE_SESSION_STATUSES} (last session state: {state})")
@@ -179,6 +184,8 @@ def main():
                     logger.error(f"Ошибка при перезагрузке: {e}")
                 if obs_client:
                     try:
+                        obs_client = obs.ReqClient(host=OBS_WS_HOST, port=OBS_WS_PORT, password=OBS_WS_PASSWORD)
+                        obs_client.get_version()
                         stop_record_and_wait(obs_client)
                     except Exception as e:
                         logger.error(f"Ошибка при остановке записи в OBS: {e}")
