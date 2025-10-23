@@ -66,7 +66,7 @@ python vm_watcher_zfs.py
 * При завершении сессии останавливает запись в OBS, отправляет команду **shutdown** в выбранную виртуальную машину, ждёт её остановки 60 сек (если не дождался — force off), затем делает `zfs rollback` дисков этой машины к снепшоту `@clean` и запускает машину заново
 
 ---
-### Другие полезности для drova
+### Ссылки на ПО для drova, созданное сообществом
 
 [Telegram Drova Session Manager Bot](https://github.com/Xerz/drova-telegram-server-info/tree/main) — телеграм-бот для просмотра сессий
 
