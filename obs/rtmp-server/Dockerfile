@@ -5,7 +5,7 @@ RUN apk add --no-cache build-base git bash gcc make g++ zlib-dev linux-headers p
 
 WORKDIR /build
 
-RUN git clone https://github.com/arut/nginx-rtmp-module.git && \
+RUN git clone https://github.com/sergey-dryabzhinsky/nginx-rtmp-module.git && \
     git clone https://github.com/nginx/nginx.git
 
 WORKDIR /build/nginx
