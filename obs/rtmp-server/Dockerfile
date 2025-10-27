@@ -29,7 +29,7 @@ COPY ./nginx.conf /usr/local/nginx/conf/nginx.conf
 # Каталог для записей
 RUN mkdir -p /recordings
 
-EXPOSE 1935 8081
+EXPOSE 1935
 
 ENTRYPOINT ["/usr/local/nginx/sbin/nginx"]
 CMD ["-g", "daemon off;"]
