@@ -10,4 +10,5 @@ services:
     volumes:
       - ${RECORD_PATH}:/recordings
       - ./tokens.conf:/etc/nginx/tokens.conf
+      - ./whitelist.conf:/etc/nginx/whitelist.conf
     restart: unless-stopped
