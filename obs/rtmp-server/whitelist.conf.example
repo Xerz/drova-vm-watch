@@ -1,0 +1,10 @@
+# === Белый список IP, которым разрешено стримить ===
+
+allow publish 192.168.0.101;
+allow publish 192.168.0.102;
+allow publish 192.168.0.103;
+allow publish 10.0.0.5;
+deny  publish all;
+
+# Запретить просмотр вообще
+deny play all;
