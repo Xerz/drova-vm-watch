@@ -17,7 +17,7 @@ services:
 
     # Монтируем конфиг и каталог для записей
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf.template:ro
       - ${RECORD_PATH}:/recordings
 
     # Включаем модуль rtmp
