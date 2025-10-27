@@ -27,7 +27,9 @@ COPY --from=builder /usr/local/nginx /usr/local/nginx
 COPY ./nginx.conf /usr/local/nginx/conf/nginx.conf
 
 # Каталог для записей
-RUN mkdir -p /recordings
+RUN mkdir -p /recordings \
+    && chmod 777 /recordings \
+    && chown -R nobody:nobody /recordings
 
 EXPOSE 1935
 
