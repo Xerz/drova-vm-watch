@@ -2,3 +2,4 @@
 .env
 recordings
 tokens.conf
+token.json
