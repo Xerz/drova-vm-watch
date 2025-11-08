@@ -4,7 +4,6 @@ import time
 import logging
 import requests
 
-from vm_watcher_zfs import ACTIVE_SESSION_STATUSES
 from dotenv import load_dotenv
 
 # Загружаем переменные из .env
@@ -129,7 +128,7 @@ def wait_for_status(get_status, statuses, desired: bool, timeout=0):
     waiting_msg_printed = False
     waited = 0
     while True:
-        station_status = get_status(ACTIVE_SESSION_STATUSES)
+        station_status = get_status(statuses)
         if desired:
             if station_status and station_status in statuses:
                 return

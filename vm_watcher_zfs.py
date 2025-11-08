@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-import json
 import logging
 import os
 
 from utils_api import get_last_session_status, get_station_status, set_station_published, wait_for_status
 
-from dotenv import load_dotenv
-
 from utils_obs import start_record, stop_record_and_wait
 from utils_virt_zfs import reset
 
 # Загружаем переменные из .env
+from dotenv import load_dotenv
 load_dotenv()
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "ERROR").upper()
