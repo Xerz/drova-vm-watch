@@ -121,7 +121,7 @@ def get_station_published():
         return data.get("published")
     except Exception as e:
         logger.error(f"Ошибка запроса статуса публикации сервера: {e}")
-        return "false"
+        return False
 
 def set_station_published(published: bool):
     try:
