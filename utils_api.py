@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 with open("token.json", "r") as f:
     token_data = json.load(f)
 
-AUTH_TOKEN = token_data.get("auth_token")
 SLEEP_TIME = int(os.getenv("SLEEP_TIME", "10"))
 SERVER_UUID = os.getenv("SERVER_UUID")
 USER_ID = os.getenv("USER_ID")
@@ -41,17 +40,18 @@ SERVER_ENDPOINT = f"https://services.drova.io/server-manager/servers/{SERVER_UUI
 VISIBILITY_ENDPOINT = f"https://services.drova.io/server-manager/servers/{SERVER_UUID}/set_published/"
 RENEWAL_ENDPOINT = f"https://services.drova.io/server-manager/servers/{SERVER_UUID}/renew"
 HEADERS = {"X-Auth-Token": AUTH_TOKEN}
+AUTH_TOKEN = token_data.get("auth_token")
 
 
 # Функция для request и при необходимости обновления токена один раз перед окончательной ошибкой
 def request_token_renewal():
+    global AUTH_TOKEN
     try:
         r = requests.post(RENEWAL_ENDPOINT, json={"proxy_token": AUTH_TOKEN}, timeout=5)
         r.raise_for_status()
         data = r.json()
         new_token = data.get("proxyToken")
         if new_token:
-            global AUTH_TOKEN
             AUTH_TOKEN = new_token
             HEADERS["X-Auth-Token"] = AUTH_TOKEN
             with open("token.json", "w") as f:
