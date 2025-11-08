@@ -2,7 +2,7 @@
 import logging
 import os
 
-from utils_api import get_last_session_status, get_station_status, set_station_published, wait_for_status
+from utils_api import get_last_session_status, get_station_status, get_station_published, set_station_published, wait_for_status
 
 from utils_obs import start_record, stop_record_and_wait
 from utils_virt_zfs import reset
@@ -29,6 +29,9 @@ def main():
         # Ждем активную сессию
         wait_for_status(get_status=get_last_session_status, statuses=ACTIVE_SESSION_STATUSES, desired=True)
 
+        # Запоминаем, был ли сервер опубликован при начале сессии
+        published_when_started = get_station_published()
+
         # Запускаем запись в OBS
         start_record()
 
@@ -36,7 +39,8 @@ def main():
         wait_for_status(get_status=get_last_session_status, statuses=ACTIVE_SESSION_STATUSES, desired=False)
 
         # Переводим сервер в приватный режим
-        set_station_published(published=False)
+        if published_when_started:
+            set_station_published(published=False)
 
         # Ждём, пока станция перестанет быть занятой
         wait_for_status(get_status=get_station_status, statuses=BUSY_STATION_STATUSES, desired=False, timeout=GRACE_PERIOD)
@@ -48,7 +52,8 @@ def main():
         stop_record_and_wait()
 
         # Возвращаем сервер в публичный режим
-        set_station_published(published=True)
+        if published_when_started:
+            set_station_published(published=True)
 
 
 if __name__ == "__main__":

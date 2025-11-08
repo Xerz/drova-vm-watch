@@ -113,6 +113,15 @@ def get_station_status(statuses):
         logger.error(f"Ошибка запроса статуса сервера: {e}")
         return None
 
+def get_station_published():
+    try:
+        r = safe_request("GET", SERVER_ENDPOINT)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("published") == "true"
+    except Exception as e:
+        logger.error(f"Ошибка запроса статуса публикации сервера: {e}")
+        return "false"
 
 def set_station_published(published: bool):
     try:
