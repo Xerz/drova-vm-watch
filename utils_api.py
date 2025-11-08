@@ -137,12 +137,14 @@ def wait_for_status(get_status, statuses, desired: bool, timeout=0):
     waiting_msg_printed = False
     waited = 0
     while True:
+        station_status = get_status(statuses)
+
         if not waiting_msg_printed:
             logger.info(f"Waiting for station to become {'in' if desired else 'not in'} {statuses} (current: {station_status})")
             waiting_msg_printed = True
         else:
             logger.debug(f"Still waiting (station_status={station_status})")
-        station_status = get_status(statuses)
+
         if desired:
             if station_status and station_status in statuses:
                 return
