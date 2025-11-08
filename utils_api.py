@@ -39,8 +39,8 @@ SESSIONS_ENDPOINT = "https://services.drova.io/session-manager/sessions"
 SERVER_ENDPOINT = f"https://services.drova.io/server-manager/servers/{SERVER_UUID}"
 VISIBILITY_ENDPOINT = f"https://services.drova.io/server-manager/servers/{SERVER_UUID}/set_published/"
 RENEWAL_ENDPOINT = f"https://services.drova.io/server-manager/servers/{SERVER_UUID}/renew"
-HEADERS = {"X-Auth-Token": AUTH_TOKEN}
 AUTH_TOKEN = token_data.get("auth_token")
+HEADERS = {"X-Auth-Token": AUTH_TOKEN}
 
 
 # Функция для request и при необходимости обновления токена один раз перед окончательной ошибкой
