@@ -41,7 +41,7 @@ def main():
         # Ждём, пока станция перестанет быть занятой
         wait_for_status(get_status=get_station_status, statuses=BUSY_STATION_STATUSES, desired=False, timeout=GRACE_PERIOD)
 
-        # Сбрасываем ВМ
+        # Сбрасываем состояние машины
         reset()
 
         # Останавливаем запись в OBS
