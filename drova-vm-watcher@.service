@@ -1,0 +1,22 @@
+[Unit]
+Description=Drova VM watcher (%i)
+After=network-online.target zfs-mount.service virtqemud.service libvirtd.service
+Wants=network-online.target
+ConditionPathExists=/home/xrzvs/drova-vm-watch/.env.%i
+
+[Service]
+Type=simple
+WorkingDirectory=/home/xrzvs/drova-vm-watch
+
+# ваши переменные для инстанса
+EnvironmentFile=/home/xrzvs/drova-vm-watch/.env.%i
+
+ExecStart=/home/xrzvs/drova-vm-watch/rebooter-venv/bin/python vm_watcher_zfs.py
+
+Restart=on-failure
+RestartSec=5s
+KillMode=control-group
+TimeoutStopSec=5s
+
+[Install]
+WantedBy=multi-user.target

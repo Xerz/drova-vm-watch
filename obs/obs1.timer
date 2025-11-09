@@ -1,0 +1,12 @@
+[Unit]
+Description=Delay start OBS1 after GNOME session
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Timer]
+OnActiveSec=25s
+AccuracySec=1s
+Unit=obs2.service
+
+[Install]
+WantedBy=graphical-session.target
