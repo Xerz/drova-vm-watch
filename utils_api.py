@@ -38,7 +38,7 @@ USER_ID = os.getenv("USER_ID")
 SESSIONS_ENDPOINT = "https://services.drova.io/session-manager/sessions"
 SERVER_ENDPOINT = f"https://services.drova.io/server-manager/servers/{SERVER_UUID}"
 VISIBILITY_ENDPOINT = f"https://services.drova.io/server-manager/servers/{SERVER_UUID}/set_published/"
-RENEWAL_ENDPOINT = f"https://services.drova.io/server-manager/servers/{SERVER_UUID}/renew"
+RENEWAL_ENDPOINT = f"https://services.drova.io/token-verifier/renewProxyToken"
 AUTH_TOKEN = token_data.get("auth_token")
 HEADERS = {"X-Auth-Token": AUTH_TOKEN}
 
