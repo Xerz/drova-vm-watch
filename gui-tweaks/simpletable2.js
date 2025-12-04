@@ -10,6 +10,11 @@
   inject(function main() {
     'use strict';
 
+
+    // работаем только на странице /my-account
+    if (!/^\/my-account(?:\/|$)/.test(location.pathname)) return;
+
+
     // ---- CONFIG ----
     const TITLE_TEXT = /Играли на ваших станциях/i;
     const SESSIONS_RE = /\/session-manager\/sessions(?:\?|$)/i;
@@ -23,9 +28,13 @@
       name: 'cdnjs@6.3.1'
     };
 
+
+    // GeoIP база для сопоставления IP → город
+    const CITY_DB_URL = 'https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-City.mmdb';
+
     // Какие столбцы показывать в «human-only» режиме
     const HUMAN_COLUMNS = [
-      'client_id','creator_ip','product_name','server_name','created_on_human','duration_human',
+      'client_id','creator_ip','city','product_name','server_name','created_on_human','duration_human',
       'billing_type','client_sessions','client_avg_duration_human', 'client_total_duration_human',
       'finished_on_human','score','score_text',
     ];
@@ -40,6 +49,11 @@
     let tableInstance = null;
     let hiddenNodesCache = [];
     let humanOnly = true; // <— режим показа
+
+        // GeoIP (город по IP)
+    let cityDbReader = null;          // инстанс ридера mmdb
+    let cityDbLoading = null;         // промис загрузки, чтобы не гонять параллельно
+    const cityCache = Object.create(null); // ip → city (строка)
 
     // ---- STATUS PILL ----
     const pill = document.createElement('div');
@@ -271,6 +285,72 @@
       return window.Tabulator ? { ok:true, where:CDNJS.name } : { ok:false, reason:'no window.Tabulator' };
     }
 
+
+    // ---- GEOIP (city by IP) ----
+    async function ensureCityDb() {
+      if (cityDbReader) return cityDbReader;
+      if (cityDbLoading) return cityDbLoading;
+
+      cityDbLoading = (async () => {
+        try {
+          setPill('load GeoLite2 DB');
+
+          const [mmdbMod, bufferMod] = await Promise.all([
+            import('https://esm.sh/mmdb-lib@3'),
+            import('https://esm.sh/buffer@6')
+          ]);
+
+          const { Reader } = mmdbMod;
+          const { Buffer } = bufferMod;
+
+          const resp  = await fetch(CITY_DB_URL);
+          const arr   = await resp.arrayBuffer();
+          const dbBuf = Buffer.from(arr);
+
+          cityDbReader = new Reader(dbBuf);
+          setPill('GeoLite2 ready');
+          return cityDbReader;          // ← без scheduleRender
+        } catch (e) {
+          console.error('GeoLite2 load error', e);
+          setPill('GeoLite2 error');
+          cityDbReader = null;
+          throw e;
+        }
+      })();
+
+      return cityDbLoading;
+    }
+
+
+    function lookupCity(ip) {
+      if (!ip) return '! not ip';
+      const key = String(ip).trim();
+      if (!key) return '! not key';
+
+      // если база ещё не готова — дёрнем загрузку в фоне и вернём пустоту
+      if (!cityDbReader) {
+        ensureCityDb().catch(() => {});
+        return '! base not ready';
+      }
+
+      if (Object.prototype.hasOwnProperty.call(cityCache, key)) {
+        return cityCache[key];
+      }
+
+      let city = '';
+      try {
+        const res = cityDbReader.get(key);
+        const names =
+          (res && (res.city?.names || res.registered_country?.names || res.country?.names)) || {};
+        city = names.ru || names.en || names.de || names['en'] || '';
+      } catch (e) {
+        city = '';
+      }
+
+      cityCache[key] = city || '';
+      return cityCache[key];
+    }
+
     // Список всех возможных колонок (кроме merchant_id); порядок «разумный»
     function getAllColumns(rows) {
       const set = new Set();
@@ -284,7 +364,7 @@
         'created_on','created_on_human',
         'finished_on','finished_on_human',
         'duration_human',
-        'creator_ip',
+        'creator_ip','city',
         'score','score_reason','score_text',
         'abort_comment',
         'billing_type'
@@ -373,7 +453,8 @@
           duration_human,
           client_sessions: clientCounts[s.client_id],
           client_avg_duration_human,
-          client_total_duration_human
+          client_total_duration_human,
+          city: lookupCity(s.creator_ip)
         };
         delete obj.merchant_id;
         return obj;
@@ -385,6 +466,19 @@
     let tableBuilt = false;
     // ---- RENDER ----
     async function renderTable() {
+        if (!cityDbReader) {
+        try {
+          await ensureCityDb();           // блокируем рендер до загрузки базы
+        } catch (e) {
+          // Если хочешь вообще не показывать таблицу без базы — просто выходим
+          // setPill('GeoLite2 failed, no table');
+          // return;
+
+          // Альтернатива, если вдруг захочешь всё-таки рендерить без города:
+          setPill('GeoLite2 failed, city disabled');
+          // // и НЕ делаем return — код ниже выполнится
+        }
+      }
       const sig = fullSig();
       if (sig === lastSig) { setPill('no changes'); return; }
       lastSig = sig;
