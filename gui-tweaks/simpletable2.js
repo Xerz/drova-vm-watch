@@ -47,9 +47,9 @@
         let hiddenNodesCache = [];
         let humanOnly = true; // <— режим показа
 
-        let lastSessionsUrl = null;
-        let lastServerNamesUrl = null;
-        let lastProductsUrl = null;
+        let lastSessionsReq = null;    // { url, init }
+        let lastServerNamesReq = null; // { url, init }
+        let lastProductsReq = null;    // { url, init }
 
 
         // GeoIP (город по IP)
@@ -198,15 +198,61 @@
             return null;                          // без изменений
         }
 
+        function cloneHeaders(headers) {
+            if (!headers) return undefined;
+            if (headers instanceof Headers) {
+                const h = new Headers();
+                headers.forEach((v, k) => h.append(k, v));
+                return h;
+            }
+            if (Array.isArray(headers)) {
+                const h = {};
+                headers.forEach(([k, v]) => {
+                    h[k] = v;
+                });
+                return h;
+            }
+            if (typeof headers === 'object') {
+                return {...headers};
+            }
+            return headers;
+        }
+
+        // аккуратно копируем init, чтобы сохранить method/headers/body/credentials и т.п.
+        function buildStoredFetchInit(input, init) {
+            let base = init;
+
+            // случай fetch(new Request(...)), когда init не передавали
+            if (!base && input instanceof Request) {
+                base = {
+                    method: input.method,
+                    headers: input.headers, // body из Request доставать не будем (ReadableStream), но чаще всего им не пользуются
+                };
+            }
+
+            if (!base) return undefined;
+
+            const stored = {...base};
+            if (base.headers) {
+                stored.headers = cloneHeaders(base.headers);
+            }
+            return stored;
+        }
+
+
         function reloadDataFromApi() {
             try {
                 const jobs = [];
-                if (lastSessionsUrl) jobs.push(fetch(lastSessionsUrl).catch(() => {
-                }));
-                if (lastServerNamesUrl) jobs.push(fetch(lastServerNamesUrl).catch(() => {
-                }));
-                if (lastProductsUrl) jobs.push(fetch(lastProductsUrl).catch(() => {
-                }));
+
+                const pushReq = (req) => {
+                    if (!req || !req.url) return;
+                    jobs.push(fetch(req.url, req.init || {}).catch(() => {
+                    }));
+                };
+
+                pushReq(lastSessionsReq);
+                pushReq(lastServerNamesReq);
+                pushReq(lastProductsReq);
 
                 if (jobs.length) {
                     Promise.all(jobs).then(() => {
@@ -215,11 +261,9 @@
                     }).catch(() => {
                     });
                 } else {
-                    // если ещё ни разу не было запросов — просто перезагрузим страницу
-                    location.reload();
+                    // если ни одного fetch-запроса не отловили — падаем назад на полный reload страницы
                 }
             } catch (e) {
-                location.reload();
             }
         }
 
@@ -961,7 +1005,7 @@
                     const json = await handle(res.clone());
                     if (Array.isArray(json?.sessions)) {
                         rawSessions = json.sessions;
-                        lastSessionsUrl = usedUrl;
+                        lastSessionsReq = {url: usedUrl, init: buildStoredFetchInit(input, init)};
                         setPill?.(`sessions:${rawSessions.length}`);
                         scheduleRender(60);
                     }
@@ -969,7 +1013,7 @@
                     const json = await handle(res.clone());
                     if (json && typeof json === 'object' && !Array.isArray(json)) {
                         serverNames = {...serverNames, ...json};
-                        lastServerNamesUrl = usedUrl;
+                        lastServerNamesReq = {url: usedUrl, init: buildStoredFetchInit(input, init)};
                         setPill?.(`server_names:${Object.keys(serverNames).length}`);
                         scheduleRender(40);
                     }
@@ -981,7 +1025,7 @@
                             const id = p.productId || p.id || p.uuid;
                             if (id) productsById[id] = p;
                         }
-                        lastProductsUrl = usedUrl;
+                        lastProductsReq = {url: usedUrl, init: buildStoredFetchInit(input, init)};
                         setPill?.(`products:${Object.keys(productsById).length}`);
                         scheduleRender(40);
                     }
@@ -1023,7 +1067,6 @@
                         const json = JSON.parse(xhr.responseText);
                         if (Array.isArray(json?.sessions)) {
                             rawSessions = json.sessions;
-                            lastSessionsUrl = _url;
                             setPill?.(`sessions:${rawSessions.length}`);
                             scheduleRender(60);
                         }
@@ -1031,7 +1074,6 @@
                         const json = JSON.parse(xhr.responseText);
                         if (json && typeof json === 'object' && !Array.isArray(json)) {
                             serverNames = {...serverNames, ...json};
-                            lastServerNamesUrl = _url;
                             setPill?.(`server_names:${Object.keys(serverNames).length}`);
                             scheduleRender(40);
                         }
@@ -1043,11 +1085,11 @@
                                 const id = p.productId || p.id || p.uuid;
                                 if (id) productsById[id] = p;
                             }
-                            lastProductsUrl = _url;
                             setPill?.(`products:${Object.keys(productsById).length}`);
                             scheduleRender(40);
                         }
                     }
+
                 } catch {
                 }
             });
