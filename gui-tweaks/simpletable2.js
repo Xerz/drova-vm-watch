@@ -47,6 +47,11 @@
         let hiddenNodesCache = [];
         let humanOnly = true; // <— режим показа
 
+        let lastSessionsUrl = null;
+        let lastServerNamesUrl = null;
+        let lastProductsUrl = null;
+
+
         // GeoIP (город по IP)
         let cityDbReader = null;          // инстанс ридера mmdb (City)
         let cityDbLoading = null;         // промис загрузки, чтобы не гонять параллельно
@@ -192,6 +197,32 @@
             }
             return null;                          // без изменений
         }
+
+        function reloadDataFromApi() {
+            try {
+                const jobs = [];
+                if (lastSessionsUrl) jobs.push(fetch(lastSessionsUrl).catch(() => {
+                }));
+                if (lastServerNamesUrl) jobs.push(fetch(lastServerNamesUrl).catch(() => {
+                }));
+                if (lastProductsUrl) jobs.push(fetch(lastProductsUrl).catch(() => {
+                }));
+
+                if (jobs.length) {
+                    Promise.all(jobs).then(() => {
+                        lastSig = '';
+                        scheduleRender(150);
+                    }).catch(() => {
+                    });
+                } else {
+                    // если ещё ни разу не было запросов — просто перезагрузим страницу
+                    location.reload();
+                }
+            } catch (e) {
+                location.reload();
+            }
+        }
+
 
         function withLock(fn) {
             MUTATE_LOCK++;
@@ -721,24 +752,35 @@
                     toolbar = document.createElement('div');
                     toolbar.className = 'ds-toolbar';
                     toolbar.innerHTML = `
-            <button data-act="toggle-human">Human columns: Off</button>
+            <button data-act="toggle-human">Human only: Off</button>
             <button data-act="csv">Export CSV</button>
             <button data-act="clear">Clear filters</button>
+            <button data-act="reload">Reload Data</button>
           `;
                     wrap.prepend(toolbar);
                     updateHumanButton(toolbar);
                     toolbar.addEventListener('click', (e) => {
                         const btn = e.target.closest('button[data-act]');
                         if (!btn) return;
+
                         if (btn.dataset.act === 'toggle-human') {
                             humanOnly = !humanOnly;
                             updateHumanButton(toolbar);
-                            // сбросим сигнатуру, чтобы форснуть рендер с новыми колонками
                             lastSig = '';
                             scheduleRender(0);
                         }
-                        if (btn.dataset.act === 'csv') tableInstance.download('csv', 'drova-sessions.csv');
-                        if (btn.dataset.act === 'clear') tableInstance?.clearHeaderFilter?.();
+
+                        if (btn.dataset.act === 'csv') {
+                            tableInstance.download('csv', 'drova-sessions.csv');
+                        }
+
+                        if (btn.dataset.act === 'clear') {
+                            tableInstance?.clearHeaderFilter?.();
+                        }
+
+                        if (btn.dataset.act === 'reload') {
+                            reloadDataFromApi();
+                        }
                     });
                 });
             } else {
@@ -870,7 +912,7 @@
 
         function updateHumanButton(toolbar) {
             const btn = toolbar.querySelector('button[data-act="toggle-human"]');
-            if (btn) btn.textContent = `Human columns: ${humanOnly ? 'On' : 'Off'}`;
+            if (btn) btn.textContent = `Human only: ${humanOnly ? 'On' : 'Off'}`;
         }
 
 
@@ -919,6 +961,7 @@
                     const json = await handle(res.clone());
                     if (Array.isArray(json?.sessions)) {
                         rawSessions = json.sessions;
+                        lastSessionsUrl = usedUrl;
                         setPill?.(`sessions:${rawSessions.length}`);
                         scheduleRender(60);
                     }
@@ -926,6 +969,7 @@
                     const json = await handle(res.clone());
                     if (json && typeof json === 'object' && !Array.isArray(json)) {
                         serverNames = {...serverNames, ...json};
+                        lastServerNamesUrl = usedUrl;
                         setPill?.(`server_names:${Object.keys(serverNames).length}`);
                         scheduleRender(40);
                     }
@@ -937,10 +981,12 @@
                             const id = p.productId || p.id || p.uuid;
                             if (id) productsById[id] = p;
                         }
+                        lastProductsUrl = usedUrl;
                         setPill?.(`products:${Object.keys(productsById).length}`);
                         scheduleRender(40);
                     }
                 }
+
             } catch {
             }
             return res;
@@ -977,6 +1023,7 @@
                         const json = JSON.parse(xhr.responseText);
                         if (Array.isArray(json?.sessions)) {
                             rawSessions = json.sessions;
+                            lastSessionsUrl = _url;
                             setPill?.(`sessions:${rawSessions.length}`);
                             scheduleRender(60);
                         }
@@ -984,6 +1031,7 @@
                         const json = JSON.parse(xhr.responseText);
                         if (json && typeof json === 'object' && !Array.isArray(json)) {
                             serverNames = {...serverNames, ...json};
+                            lastServerNamesUrl = _url;
                             setPill?.(`server_names:${Object.keys(serverNames).length}`);
                             scheduleRender(40);
                         }
@@ -995,6 +1043,7 @@
                                 const id = p.productId || p.id || p.uuid;
                                 if (id) productsById[id] = p;
                             }
+                            lastProductsUrl = _url;
                             setPill?.(`products:${Object.keys(productsById).length}`);
                             scheduleRender(40);
                         }
