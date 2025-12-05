@@ -259,11 +259,14 @@
                         lastSig = '';
                         scheduleRender(150);
                     }).catch(() => {
+                        location.reload();
                     });
                 } else {
                     // если ни одного fetch-запроса не отловили — падаем назад на полный reload страницы
+                    location.reload();
                 }
             } catch (e) {
+                location.reload();
             }
         }
 
