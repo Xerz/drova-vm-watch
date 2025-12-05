@@ -47,9 +47,7 @@
         let hiddenNodesCache = [];
         let humanOnly = true; // <— режим показа
 
-        let lastSessionsReq = null;    // { url, init }
-        let lastServerNamesReq = null; // { url, init }
-        let lastProductsReq = null;    // { url, init }
+        let lastSessionsReq = null;    // { url, method, headers, body }
 
 
         // GeoIP (город по IP)
@@ -225,8 +223,7 @@
             // случай fetch(new Request(...)), когда init не передавали
             if (!base && input instanceof Request) {
                 base = {
-                    method: input.method,
-                    headers: input.headers, // body из Request доставать не будем (ReadableStream), но чаще всего им не пользуются
+                    method: input.method, headers: input.headers, // body из Request доставать не будем (ReadableStream), но чаще всего им не пользуются
                 };
             }
 
@@ -251,8 +248,6 @@
                 };
 
                 pushReq(lastSessionsReq);
-                pushReq(lastServerNamesReq);
-                pushReq(lastProductsReq);
 
                 if (jobs.length) {
                     Promise.all(jobs).then(() => {
@@ -1092,6 +1087,7 @@
                             scheduleRender(40);
                         }
                     }
+
 
                 } catch {
                 }
