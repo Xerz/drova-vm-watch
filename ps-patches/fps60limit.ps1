@@ -1,10 +1,8 @@
 # Set-NvidiaGlobalFpsLimit.ps1
-# Запуск: powershell -ExecutionPolicy Bypass -File .\Set-NvidiaGlobalFpsLimit.ps1 -Fps 60
+# Запуск: powershell -ExecutionPolicy Bypass -File .\Set-NvidiaGlobalFpsLimit.ps1
 
-param(
-  [ValidateRange(20, 1000)]
-  [int]$Fps = 60
-)
+Start-Sleep -Seconds 15
+
 
 $Here   = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $NpiExe = Join-Path $Here "nvidiaProfileInspector.exe"
@@ -31,40 +29,19 @@ function Ensure-NPI {
 
 Ensure-NPI -ExePath $NpiExe -Folder $Here
 
-# === Формируем .nip для Base Profile ===
-# Frame Rate Limiter SettingID:
-# 0x10834FEE -> 277041134
-# 0x1083500A -> 277041162 (значение слайдера/отображаемое)
-# Кодирование: 0x80000000 (включить) + fps (в младшем байте), плюс опционально 0x20000000 (разрешить windowed)
-$frlValue = [uint32](0x80000000 + $Fps) -bor [uint32]0x20000000
+$Here  = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+$Npi   = Join-Path $Here "nvidiaProfileInspector.exe"
+$Nip   = Join-Path $Here "60fps.nip"
 
-$nipPath = Join-Path $Here ("BaseProfile_{0}fps.nip" -f $Fps)
+if (!(Test-Path $Npi)) { throw "Не найден: $Npi" }
+if (!(Test-Path $Nip)) { throw "Не найден: $Nip" }
 
-$xml = @"
-<?xml version="1.0" encoding="utf-16"?>
-<ArrayOfProfile>
-  <Profile>
-    <ProfileName>Base Profile</ProfileName>
-    <Executeables />
-    <Settings>
-      <ProfileSetting>
-        <SettingID>277041134</SettingID>
-        <SettingValue>$frlValue</SettingValue>
-        <ValueType>Dword</ValueType>
-      </ProfileSetting>
-      <ProfileSetting>
-        <SettingID>277041162</SettingID>
-        <SettingValue>$Fps</SettingValue>
-        <ValueType>Dword</ValueType>
-      </ProfileSetting>
-    </Settings>
-  </Profile>
-</ArrayOfProfile>
-"@
-
-[System.IO.File]::WriteAllText($nipPath, $xml, [System.Text.Encoding]::Unicode)
-
-Write-Host "Импортирую профиль (silent): $nipPath"
-& $NpiExe -silentImport $nipPath
-
-Write-Host "Готово: глобальный лимит FPS = $Fps. Перезапусти игры/приложения."
+# Иногда встречаются разные “тихие” ключи в разных версиях.
+# 1) Пробуем undocumented -silentImport :contentReference[oaicite:5]{index=5}
+try {
+  & $Npi -silentImport $Nip
+  exit 0
+} catch {
+  # 2) Фолбэк: формат "exe file.nip -silent" встречается в обсуждениях :contentReference[oaicite:6]{index=6}
+  & $Npi $Nip -silent
+}
