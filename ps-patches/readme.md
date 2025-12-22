@@ -2,4 +2,8 @@
 
 0. Прочитать файлы `60fps.nip`, `60fps.xml` и `fps60limit.ps1` и убедиться, что вы понимаете каждую строчку.
 1. Положить `60fps.nip` и `fps60limit.ps1` в папку `C:\ProgramData\Drova`, запустить один раз `fps60limit.ps1` в терминале.
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File .\fps60limit.ps1
+   ```
+    
 2. Импортировать `60fps.xml` в планировщике задач Windows
