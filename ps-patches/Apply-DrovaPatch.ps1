@@ -32,7 +32,7 @@ $registryPatches = @(
     @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\System"; Name = "DisableGpedit"; Type = "DWORD"; Value = 1 },
     @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"; Name = "HideFastUserSwitching"; Type = "DWORD"; Value = 1 },
     @{ Path = "HKCU:\Software\Policies\Microsoft\MMC"; Name = "RestrictToPermittedSnapins"; Type = "DWORD"; Value = 1 },
-    @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"; Name = "DisallowRun"; Type = "DWORD"; Value = 1 }
+    @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"; Name = "DisallowRun"; Type = "DWORD"; Value = 1 },
     @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\System"; Name = "DisableLockWorkstation"; Type = "DWORD"; Value = 1 },
     @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon";       Name = "DisableLockWorkstation"; Type = "DWORD"; Value = 1 }
 )
