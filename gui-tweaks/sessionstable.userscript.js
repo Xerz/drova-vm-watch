@@ -96,6 +96,20 @@
       .ds-toolbar{
         display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap
       }
+      .ds-toolbar { display:flex; gap:8px; align-items:center; margin:8px 0; flex-wrap:wrap }
+
+.ds-toolbar .ds-row{
+  display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  flex-basis:100%;
+}
+
+.ds-toolbar .ds-row--main{ flex-basis:100%; }
+.ds-toolbar .ds-row--ranges{ flex-basis:100%; margin-top:6px; }
+
+.ds-toolbar .ds-row--ranges button{
+  background:#0b1220;
+  border-color:#4b5563;
+}
       .ds-toolbar button{
         padding:6px 10px;border-radius:8px;
         background:#111827;color:#e5e7eb;
@@ -512,6 +526,62 @@
             return d.getTime();
         }
 
+        function fmtDateYYYYMMDD(d) {
+            const Y = d.getFullYear();
+            const M = String(d.getMonth() + 1).padStart(2, '0');
+            const D = String(d.getDate()).padStart(2, '0');
+            return `${Y}-${M}-${D}`;
+        }
+
+        function setCreatedOnFilterDates(fromStr, toStr) {
+            // если инпуты уже есть — меняем их (самый надёжный способ)
+            if (createdOnFromInputEl && createdOnToInputEl) {
+                createdOnFromInputEl.value = fromStr || '';
+                createdOnToInputEl.value = toStr || '';
+                createdOnFromInputEl.dispatchEvent(new Event('change', { bubbles: true }));
+                createdOnToInputEl.dispatchEvent(new Event('change', { bubbles: true }));
+                return;
+            }
+
+            // fallback: если инпуты ещё не отрендерены
+            if (tableInstance?.setHeaderFilterValue) {
+                const fromMs = parseDateInputToMs(fromStr);
+                const toMsRaw = parseDateInputToMs(toStr);
+                const toMs = toMsRaw != null ? (toMsRaw + 24*60*60*1000 - 1) : null;
+                tableInstance.setHeaderFilterValue('created_on_human', { from: fromMs, to: toMs });
+            }
+        }
+
+        function applyCreatedOnRange(key) {
+            const now = new Date();
+
+            let from = null;
+            let to = new Date(now);
+
+            if (key === 'current_month') {
+                from = new Date(now.getFullYear(), now.getMonth(), 1);
+            } else if (key === 'last_month') {
+                from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                to = new Date(now.getFullYear(), now.getMonth(), 0); // последний день прошлого месяца
+            } else if (key === 'last_7') {
+                from = new Date(now);
+                from.setDate(from.getDate() - 6);
+            } else if (key === 'last_30') {
+                from = new Date(now);
+                from.setDate(from.getDate() - 29);
+            } else if (key === 'last_90') {
+                from = new Date(now);
+                from.setDate(from.getDate() - 89);
+            } else {
+                return;
+            }
+
+            setCreatedOnFilterDates(fmtDateYYYYMMDD(from), fmtDateYYYYMMDD(to));
+        }
+
+
+        let createdOnFromInputEl = null;
+        let createdOnToInputEl = null;
         // headerFilter-редактор для created_on (два поля: от/до)
         function createdOnHeaderFilter(cell, onRendered, success, cancel, editorParams) {
             const wrap = document.createElement('div');
@@ -532,6 +602,9 @@
             inputTo.style.display = 'block';
             inputTo.style.width = '100%';
             inputTo.style.boxSizing = 'border-box';
+
+            createdOnFromInputEl = inputFrom;
+            createdOnToInputEl = inputTo;
 
             function update() {
                 const fromMs = parseDateInputToMs(inputFrom.value);
@@ -989,11 +1062,22 @@
                     toolbar = document.createElement('div');
                     toolbar.className = 'ds-toolbar';
                     toolbar.innerHTML = `
-  <button data-act="toggle-human">Human only: Off</button>
-  <button data-act="csv">Export CSV</button>
-  <button data-act="clear">Clear filters</button>
-  <button data-act="reload">Reload Data</button>
-  <button data-act="more">Load MORE</button>
+  <div class="ds-row ds-row--main">
+    <button data-act="toggle-human">Human only: Off</button>
+    <button data-act="csv">Export CSV</button>
+    <button data-act="clear">Clear filters</button>
+    <button data-act="reload">Reload Data</button>
+    <button data-act="more">Load MORE</button>
+  </div>
+
+  <div class="ds-row ds-row--ranges">
+    <button data-act="range" data-range="last_month">Last Month</button>
+    <button data-act="range" data-range="current_month">Current Month</button>
+    <button data-act="range" data-range="last_30">Last 30 days</button>
+    <button data-act="range" data-range="last_7">Last 7 days</button>
+    <button data-act="range" data-range="last_90">Last 90 days</button>
+  </div>
+
   <div id="ds-duration-stats" class="ds-stats"></div>
 `;
 
@@ -1024,6 +1108,10 @@
 
                         if (btn.dataset.act === 'more') {
                             loadMoreSessionsByServers();
+                        }
+
+                        if (btn.dataset.act === 'range') {
+                            applyCreatedOnRange(btn.dataset.range);
                         }
                     });
                 });
