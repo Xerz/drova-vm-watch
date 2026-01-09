@@ -106,6 +106,15 @@
       .ds-toolbar button:active{ transform:translateY(1px); }
       .ds-toolbar span{ color:#9ca3af; }
 
+/* stats line under buttons */
+.ds-toolbar .ds-stats{
+  flex-basis:100%;
+  width:100%;
+  margin-top:6px;
+  color:#9ca3af;
+  white-space:pre-line; /* чтобы \n давал новую строку */
+}
+
       /* fallback native table (dark) */
       .ds-native{
         width:100%; border-collapse:collapse; table-layout:auto;
@@ -269,6 +278,143 @@
                     try { xhr.send(null); resolve(); } catch (e2) { reject(e2); }
                 }
             });
+        }
+
+        function xhrJson(req) {
+            return new Promise((resolve, reject) => {
+                if (!req?.url) return resolve(null);
+
+                const xhr = new OrigXHR(); // ВАЖНО: оригинальный XHR, без твоего PatchedXHR
+                xhr.open(req.method || "GET", req.url, true);
+
+                try { xhr.withCredentials = !!req.withCredentials; } catch {}
+
+                if (req.headers) {
+                    for (const [k, v] of Object.entries(req.headers)) {
+                        try { xhr.setRequestHeader(k, v); } catch {}
+                    }
+                }
+
+                xhr.onload = () => {
+                    try {
+                        const ct = (xhr.getResponseHeader("content-type") || "").toLowerCase();
+                        if (!ct.includes("application/json")) return resolve(null);
+                        resolve(JSON.parse(xhr.responseText));
+                    } catch (e) {
+                        resolve(null);
+                    }
+                };
+
+                xhr.onerror = () => reject(new Error("XHR json error"));
+
+                try {
+                    xhr.send(req.body ?? null);
+                } catch (e) {
+                    try { xhr.send(null); } catch (e2) { reject(e2); }
+                }
+            });
+        }
+
+        async function mapLimit(items, limit, fn) {
+            const res = new Array(items.length);
+            let i = 0;
+
+            const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+                while (i < items.length) {
+                    const idx = i++;
+                    try {
+                        res[idx] = await fn(items[idx], idx);
+                    } catch (e) {
+                        res[idx] = null;
+                    }
+                }
+            });
+
+            await Promise.all(workers);
+            return res;
+        }
+
+        function getUniqueServerIdsFromRows() {
+            const ids = new Set();
+
+            // если таблица уже есть — берём данные из неё (включая скрытые поля)
+            const rows = (tableInstance?.getData?.() || rawSessions || []);
+
+            for (const r of rows) {
+                // подстрахуемся под разные названия полей
+                const id =
+                      r?.server_id ??
+                      r?.server_uuid ??
+                      r?.serverId ??
+                      r?.serverUUID;
+
+                if (id) ids.add(String(id));
+            }
+
+            return [...ids];
+        }
+
+        async function loadMoreSessionsByServers() {
+            try {
+                if (!lastSessionsReq?.url) {
+                    setPill?.("Load MORE: no lastSessionsReq");
+                    return;
+                }
+
+                const serverIds = getUniqueServerIdsFromRows();
+                if (!serverIds.length) {
+                    setPill?.("Load MORE: serverNames empty");
+                    return;
+                }
+
+                setPill?.(`Load MORE: servers ${serverIds.length}…`);
+
+                // делаем URL для каждого server_id
+                const baseUrl = lastSessionsReq.url;
+
+                const makeUrl = (serverId) => {
+                    const u = new URL(baseUrl, location.href);
+                    u.searchParams.set("limit", "1000");          // на всякий
+                    u.searchParams.set("server_id", serverId);   // главное изменение
+                    return u.toString();
+                };
+
+                const reqFor = (serverId) => ({
+                    ...lastSessionsReq,
+                    url: makeUrl(serverId),
+                });
+
+                // запросы (лимит параллельности можно крутить: 3-6 обычно ок)
+                const concurrency = 4;
+
+                const results = await mapLimit(serverIds, concurrency, async (sid, idx) => {
+                    setPill?.(`Load MORE: ${idx + 1}/${serverIds.length}`);
+                    const json = await xhrJson(reqFor(sid));
+                    return Array.isArray(json?.sessions) ? json.sessions : [];
+                });
+
+                // склеиваем
+                const merged = [];
+                const seen = new Set(); // на случай дублей
+                for (const arr of results) {
+                    if (!Array.isArray(arr)) continue;
+                    for (const s of arr) {
+                        const key = s?.uuid || JSON.stringify([s?.created_on, s?.finished_on, s?.client_id, s?.server_id]);
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+                        merged.push(s);
+                    }
+                }
+
+                rawSessions = merged;
+                lastSig = "";
+                scheduleRender(0);
+
+                setPill?.(`Load MORE: done, sessions ${merged.length}`);
+            } catch (e) {
+                console.error("loadMoreSessionsByServers error", e);
+                setPill?.("Load MORE: error");
+            }
         }
 
         function reloadDataFromApi() {
@@ -744,18 +890,15 @@
 
 
         function recalcDurationHeaderStats(rowsOrData) {
-            if (!tableInstance || !window.Tabulator) return;
+            if (!tableInstance) return;
 
             let data;
             if (Array.isArray(rowsOrData) && rowsOrData.length && typeof rowsOrData[0]?.getData === 'function') {
-                // массив RowComponent'ов из dataFiltered
                 data = rowsOrData.map(row => row.getData());
             } else if (Array.isArray(rowsOrData)) {
-                // уже данные
                 data = rowsOrData;
             } else {
                 try {
-                    // все строки, которые проходят фильтры (не только текущая страница)
                     data = tableInstance.getData("active") || [];
                 } catch {
                     data = tableInstance.getData() || [];
@@ -764,23 +907,40 @@
 
             const num = data.length;
             let totalMs = 0;
+            let totalMsSub = 0;
+            let totalMsPre = 0;
 
-            data.forEach(s => {
-                if (s && s.created_on != null && s.finished_on != null) {
-                    totalMs += Number(s.finished_on) - Number(s.created_on);
-                }
-            });
+            for (const s of data) {
+                if (!s || s.created_on == null || s.finished_on == null) continue;
+
+                const ms = Number(s.finished_on) - Number(s.created_on);
+                if (!(ms > 0)) continue;
+
+                totalMs += ms;
+
+                const bt = String(s.billing_type || '').toLowerCase().trim();
+                if (bt === 'subscription') totalMsSub += ms;
+                if (bt === 'prepaid') totalMsPre += ms;
+            }
 
             const avgMs = num ? (totalMs / num) : 0;
-            const baseTitle = 'duration_human';
 
-            const title = num ? `${baseTitle} (num: ${num}, avg: ${msToHumanDuration(avgMs)}, total: ${msToHumanVerbose(totalMs)})` : baseTitle;
+            const statsEl = document.querySelector('#ds-duration-stats');
+            if (!statsEl) return;
 
-            const col = tableInstance.getColumn('duration_human');
-            if (col && col.updateDefinition) {
-                col.updateDefinition({title});
+            const hours = (ms) => (ms / 3600000); // ms -> hours
+
+            if (!num) {
+                statsEl.textContent = `duration_human: rows 0`;
+                return;
             }
+
+            statsEl.textContent =
+                `duration_human: rows ${num} · avg ${msToHumanDuration(avgMs)} · total ${msToHumanVerbose(totalMs)}\n` +
+                `в том числе: subscription ${hours(totalMsSub).toFixed(2)}ч · prepaid ${hours(totalMsPre).toFixed(2)}ч`;
         }
+
+
 
         let tableBuilt = false;
 
@@ -829,11 +989,14 @@
                     toolbar = document.createElement('div');
                     toolbar.className = 'ds-toolbar';
                     toolbar.innerHTML = `
-            <button data-act="toggle-human">Human only: Off</button>
-            <button data-act="csv">Export CSV</button>
-            <button data-act="clear">Clear filters</button>
-            <button data-act="reload">Reload Data</button>
-          `;
+  <button data-act="toggle-human">Human only: Off</button>
+  <button data-act="csv">Export CSV</button>
+  <button data-act="clear">Clear filters</button>
+  <button data-act="reload">Reload Data</button>
+  <button data-act="more">Load MORE</button>
+  <div id="ds-duration-stats" class="ds-stats"></div>
+`;
+
                     wrap.prepend(toolbar);
                     updateHumanButton(toolbar);
                     toolbar.addEventListener('click', (e) => {
@@ -857,6 +1020,10 @@
 
                         if (btn.dataset.act === 'reload') {
                             reloadDataFromApi();
+                        }
+
+                        if (btn.dataset.act === 'more') {
+                            loadMoreSessionsByServers();
                         }
                     });
                 });
