@@ -54,6 +54,8 @@
         let humanOnly = true; // <— режим показа
 
         let lastSessionsReq = null;    // { url, method, headers, body }
+        let lastServerNamesReq = null;
+        let lastProductsReq = null;
 
 
         // GeoIP (город по IP)
@@ -185,7 +187,7 @@
             (document.head || document.documentElement).appendChild(pillCSS);
             (document.body || document.documentElement).appendChild(pill);
         });
-        const setPill = (msg) => withLock(() => pill.textContent = 'DS: ' + msg);
+        const setPill = (msg) => withLock(() => pill.textContent = 'Session Table: ' + msg);
 
         // ---- HELPERS ----
         // форсим limit=1000 для sessions
@@ -242,34 +244,62 @@
             return stored;
         }
 
+        function replayXhr(req) {
+            return new Promise((resolve, reject) => {
+                if (!req?.url) return resolve();
+
+                const xhr = new XMLHttpRequest(); // это уже PatchedXHR -> нормально
+                xhr.open(req.method || "GET", req.url, true);
+
+                try { xhr.withCredentials = !!req.withCredentials; } catch {}
+
+                if (req.headers) {
+                    for (const [k, v] of Object.entries(req.headers)) {
+                        try { xhr.setRequestHeader(k, v); } catch {}
+                    }
+                }
+
+                xhr.onload = () => resolve();
+                xhr.onerror = () => reject(new Error("XHR reload error"));
+
+                try {
+                    xhr.send(req.body ?? null);
+                } catch (e) {
+                    // если body нельзя переиспользовать (например ReadableStream/Document), пробуем без body
+                    try { xhr.send(null); resolve(); } catch (e2) { reject(e2); }
+                }
+            });
+        }
 
         function reloadDataFromApi() {
             try {
-                const jobs = [];
+                const reqs = [lastSessionsReq, lastServerNamesReq, lastProductsReq].filter(r => r?.url);
 
-                const pushReq = (req) => {
-                    if (!req || !req.url) return;
-                    jobs.push(fetch(req.url, req.init || {}).catch(() => {
-                    }));
-                };
-
-                pushReq(lastSessionsReq);
-
-                if (jobs.length) {
-                    Promise.all(jobs).then(() => {
-                        lastSig = '';
-                        scheduleRender(150);
-                    }).catch(() => {
-                        location.reload();
-                    });
-                } else {
-                    // если ни одного fetch-запроса не отловили — падаем назад на полный reload страницы
+                if (!reqs.length) {
+                    console.warn("reloadDataFromApi: no cached requests, doing full reload");
                     location.reload();
+                    return;
                 }
+
+                setPill?.("reload API…");
+
+                Promise.all(reqs.map(replayXhr))
+                    .then(() => {
+                    lastSig = "";
+                    scheduleRender(150);
+                    setPill?.("reloaded");
+                })
+                    .catch((e) => {
+                    console.error("reloadDataFromApi error", e);
+                    location.reload();
+                });
             } catch (e) {
+                console.error("reloadDataFromApi fatal", e);
                 location.reload();
             }
         }
+
+
 
 
         function withLock(fn) {
@@ -774,7 +804,6 @@
             }
             const sig = fullSig();
             if (sig === lastSig) {
-                setPill('no changes');
                 return;
             }
             lastSig = sig;
@@ -955,143 +984,114 @@
         }
 
 
-        // ---- API HOOKS (fetch) ----
-        const origFetch = window.fetch;
-        window.fetch = async function patchedFetch(input, init) {
-            // 2.1. ДО отправки — переписываем limit
-            let modInput = input;
-            try {
-                const urlStr = typeof input === 'string' ? input : (input instanceof Request ? input.url : input?.url || '');
-                const rew = urlStr ? rewriteSessionsLimit(urlStr) : null;
-                if (rew) {
-                    // строка → строка; Request → новый Request(rew, input); остальное → строка
-                    if (typeof input === 'string') {
-                        modInput = rew;
-                    } else if (input instanceof Request) {
-                        modInput = new Request(rew, input);     // клонит body/опции
-                    } else {
-                        modInput = rew;
-                    }
-                    // опционально покажем статус
-                    setPill?.('rewrite limit→1000');
-                }
-            } catch {
-            }
-
-            // 2.2. отправляем
-            const res = await origFetch.apply(this, [modInput, init]);
-
-            // 2.3. ПОСЛЕ — разбираем полезную нагрузку, как раньше
-            try {
-                const usedUrl = typeof modInput === 'string' ? modInput : (modInput instanceof Request ? modInput.url : modInput?.url || '');
-
-                const handle = async (clone) => {
-                    const ct = (clone.headers.get('content-type') || '').toLowerCase();
-                    if (ct.includes('application/json')) return clone.json();
-                    const t = await clone.text();
-                    try {
-                        return JSON.parse(t);
-                    } catch {
-                        return null;
-                    }
-                };
-
-                if (/\/session-manager\/sessions(?:\?|$)/i.test(usedUrl)) {
-                    const json = await handle(res.clone());
-                    if (Array.isArray(json?.sessions)) {
-                        rawSessions = json.sessions;
-                        lastSessionsReq = {url: usedUrl, init: buildStoredFetchInit(input, init)};
-                        setPill?.(`sessions:${rawSessions.length}`);
-                        scheduleRender(60);
-                    }
-                } else if (/\/server-manager\/servers\/server_names(?:\?|$)/i.test(usedUrl)) {
-                    const json = await handle(res.clone());
-                    if (json && typeof json === 'object' && !Array.isArray(json)) {
-                        serverNames = {...serverNames, ...json};
-                        lastServerNamesReq = {url: usedUrl, init: buildStoredFetchInit(input, init)};
-                        setPill?.(`server_names:${Object.keys(serverNames).length}`);
-                        scheduleRender(40);
-                    }
-                } else if (/\/product-manager\/product\/listfull2(?:\?|$)/i.test(usedUrl)) {
-                    const json = await handle(res.clone());
-                    let list = Array.isArray(json) ? json : (Array.isArray(json?.list) ? json.list : []);
-                    if (list.length) {
-                        for (const p of list) {
-                            const id = p.productId || p.id || p.uuid;
-                            if (id) productsById[id] = p;
-                        }
-                        lastProductsReq = {url: usedUrl, init: buildStoredFetchInit(input, init)};
-                        setPill?.(`products:${Object.keys(productsById).length}`);
-                        scheduleRender(40);
-                    }
-                }
-
-            } catch {
-            }
-            return res;
-        };
 
 
         // ---- API HOOKS (XHR) ----
         const OrigXHR = window.XMLHttpRequest;
+
         window.XMLHttpRequest = function PatchedXHR() {
             const xhr = new OrigXHR();
-            let _url = '';
-            const _open = xhr.open;
 
-            xhr.open = function (method, url /*, ...rest */) {
+            let _method = "GET";
+            let _url = "";
+            let _headers = {};
+            let _body = null;
+
+            const _open = xhr.open;
+            const _send = xhr.send;
+            const _setRH = xhr.setRequestHeader;
+
+            xhr.open = function(method, url /*, async, user, password */) {
                 try {
+                    _method = String(method || "GET").toUpperCase();
+
                     const rew = rewriteSessionsLimit(url);
-                    _url = rew || url;                      // сохраняем уже переписанный URL
-                    // передаём в оригинальный open с теми же аргами, но с новым URL
+                    _url = rew || url;
+
                     const args = Array.from(arguments);
-                    args[1] = _url;
+                    args[1] = _url; // подменяем URL на переписанный
                     return _open.apply(this, args);
                 } catch {
+                    _method = String(method || "GET").toUpperCase();
                     _url = url;
                     return _open.apply(this, arguments);
                 }
             };
 
-            xhr.addEventListener('load', function () {
+            xhr.setRequestHeader = function(k, v) {
+                try { _headers[String(k)] = String(v); } catch {}
+                return _setRH.apply(this, arguments);
+            };
+
+            xhr.send = function(body) {
+                _body = body ?? null;
+                return _send.apply(this, arguments);
+            };
+
+            xhr.addEventListener("load", function() {
                 try {
-                    const ct = (xhr.getResponseHeader('content-type') || '').toLowerCase();
-                    if (!ct.includes('application/json')) return;
+                    const ct = (xhr.getResponseHeader("content-type") || "").toLowerCase();
+                    if (!ct.includes("application/json")) return;
+
+                    const json = JSON.parse(xhr.responseText);
 
                     if (/\/session-manager\/sessions(?:\?|$)/i.test(_url)) {
-                        const json = JSON.parse(xhr.responseText);
                         if (Array.isArray(json?.sessions)) {
                             rawSessions = json.sessions;
+
+                            // важно: сохраняем “последний запрос”, чтобы Reload мог его переиграть
+                            lastSessionsReq = {
+                                url: _url,
+                                method: _method,
+                                headers: { ..._headers },
+                                body: _body,
+                                withCredentials: !!xhr.withCredentials,
+                            };
+
                             setPill?.(`sessions:${rawSessions.length}`);
                             scheduleRender(60);
                         }
                     } else if (/\/server-manager\/servers\/server_names(?:\?|$)/i.test(_url)) {
-                        const json = JSON.parse(xhr.responseText);
-                        if (json && typeof json === 'object' && !Array.isArray(json)) {
-                            serverNames = {...serverNames, ...json};
+                        if (json && typeof json === "object" && !Array.isArray(json)) {
+                            serverNames = { ...serverNames, ...json };
+
+                            lastServerNamesReq = {
+                                url: _url,
+                                method: _method,
+                                headers: { ..._headers },
+                                body: _body,
+                                withCredentials: !!xhr.withCredentials,
+                            };
+
                             setPill?.(`server_names:${Object.keys(serverNames).length}`);
                             scheduleRender(40);
                         }
                     } else if (/\/product-manager\/product\/listfull2(?:\?|$)/i.test(_url)) {
-                        const json = JSON.parse(xhr.responseText);
                         let list = Array.isArray(json) ? json : (Array.isArray(json?.list) ? json.list : []);
                         if (list.length) {
                             for (const p of list) {
                                 const id = p.productId || p.id || p.uuid;
                                 if (id) productsById[id] = p;
                             }
+
+                            lastProductsReq = {
+                                url: _url,
+                                method: _method,
+                                headers: { ..._headers },
+                                body: _body,
+                                withCredentials: !!xhr.withCredentials,
+                            };
+
                             setPill?.(`products:${Object.keys(productsById).length}`);
                             scheduleRender(40);
                         }
                     }
-
-
-                } catch {
-                }
+                } catch {}
             });
 
             return xhr;
         };
+
 
 
         // ---- OBSERVER ----
