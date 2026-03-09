@@ -86,7 +86,7 @@ for ($i = 0; $i -lt $blockedApps.Count; $i++) {
 
 # 5. Применить групповые политики и вернуть explorer
 Start-Process -FilePath "gpupdate.exe" -ArgumentList "/target:user","/force" -Wait
-Start-Process -FilePath "$env:WINDIR\explorer.exe"
+#Start-Process -FilePath "$env:WINDIR\explorer.exe"
 
 # 6. Снова включить службу Parsec
 $parsecSvc = Get-Service -Name $parsecServiceName -ErrorAction SilentlyContinue
