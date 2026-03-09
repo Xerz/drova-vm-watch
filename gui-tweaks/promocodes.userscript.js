@@ -1,5 +1,7 @@
 // ==UserScript==
 // @name         Drova Promo Codes Tweaks
+// @description  Adds promo-code count control and patches issue5Promocodes to issue selected amount with list refresh.
+// @version      1.0
 // @match        https://drova.io/my-account
 // @run-at       document-start
 // @grant        none
