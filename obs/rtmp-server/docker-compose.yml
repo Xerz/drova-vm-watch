@@ -1,14 +1,14 @@
-version: "3.8"
-
 services:
   obs-rtmp:
-    build: .
+    build:
+      context: .
+    image: obs-rtmp:local
     container_name: obs-rtmp
     env_file: .env
+    environment:
+      RECORD_PATH: /recordings
     ports:
-      - "${RTMP_PORT}:1935"
+      - "${RTMP_PORT:-1935}:1935"
     volumes:
-      - ${RECORD_PATH}:/recordings
-      - ./tokens.conf:/etc/nginx/tokens.conf
-      - ./whitelist.conf:/etc/nginx/whitelist.conf
+      - ${HOST_RECORD_PATH:-./recordings}:/recordings
     restart: unless-stopped

@@ -1,37 +1,51 @@
 # ===== СТАДИЯ 1: СБОРКА nginx с модулем RTMP =====
-FROM alpine:3.13.4 AS builder
+FROM alpine:3.22 AS builder
 
-RUN apk add --no-cache build-base git bash gcc make g++ zlib-dev linux-headers pcre-dev openssl-dev
+ARG NGINX_VERSION=1.28.3
+ARG NGINX_RTMP_MODULE_VERSION=v1.2.2-r1
+
+RUN apk add --no-cache \
+    build-base \
+    curl \
+    linux-headers \
+    openssl-dev \
+    pcre2-dev \
+    zlib-dev
 
 WORKDIR /build
 
-RUN git clone https://github.com/sergey-dryabzhinsky/nginx-rtmp-module.git && \
-    git clone https://github.com/nginx/nginx.git
+RUN curl -fsSLO "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz" \
+    && curl -fsSLO "https://github.com/sergey-dryabzhinsky/nginx-rtmp-module/archive/refs/tags/${NGINX_RTMP_MODULE_VERSION}.tar.gz" \
+    && tar -xzf "nginx-${NGINX_VERSION}.tar.gz" \
+    && tar -xzf "${NGINX_RTMP_MODULE_VERSION}.tar.gz"
 
-WORKDIR /build/nginx
-RUN ./auto/configure \
-    --add-module=../nginx-rtmp-module \
+WORKDIR /build/nginx-${NGINX_VERSION}
+
+RUN ./configure \
+    --add-module="../nginx-rtmp-module-${NGINX_RTMP_MODULE_VERSION#v}" \
     --prefix=/usr/local/nginx \
-    --with-http_ssl_module && \
-    make && make install
+    --with-http_ssl_module \
+    --with-pcre-jit \
+    && make -j"$(getconf _NPROCESSORS_ONLN)" \
+    && make install
 
 # ===== СТАДИЯ 2: ФИНАЛЬНЫЙ ОБРАЗ =====
-FROM alpine:3.13.4 AS runtime
+FROM alpine:3.22 AS runtime
 
-RUN apk add --no-cache pcre ffmpeg curl
+RUN apk add --no-cache \
+    openssl \
+    pcre2 \
+    zlib
 
-# Копируем собранный nginx
 COPY --from=builder /usr/local/nginx /usr/local/nginx
+COPY ./docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY ./nginx.conf.template /etc/obs-rtmp/nginx.conf.template
 
-# Конфигурация
-COPY ./nginx.conf /usr/local/nginx/conf/nginx.conf
-
-# Каталог для записей
-RUN mkdir -p /recordings \
-    && chmod 777 /recordings \
-    && chown -R nobody:nobody /recordings
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
+    && mkdir -p /recordings /etc/nginx \
+    && chmod 0777 /recordings
 
 EXPOSE 1935
 
-ENTRYPOINT ["/usr/local/nginx/sbin/nginx"]
-CMD ["-g", "daemon off;"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["/usr/local/nginx/sbin/nginx", "-g", "daemon off;"]
