@@ -1,6 +1,6 @@
 services:
   obs-rtmp:
-    image: ghcr.io/<owner>/obs-rtmp-server:latest
+    image: ghcr.io/xerz/obs-rtmp-server:latest
     container_name: obs-rtmp
     restart: unless-stopped
     environment:
