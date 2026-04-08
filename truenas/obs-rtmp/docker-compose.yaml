@@ -1,0 +1,14 @@
+services:
+  obs-rtmp:
+    image: ghcr.io/<owner>/obs-rtmp-server:latest
+    container_name: obs-rtmp
+    restart: unless-stopped
+    environment:
+      RTMP_APP: live
+      RECORD_PATH: /recordings
+      RECORD_SUFFIX: _%Y-%m-%d_%H-%M-%S.flv
+      PUBLISH_ALLOWLIST: 192.168.1.0/24
+    ports:
+      - "1935:1935"
+    volumes:
+      - /mnt/<pool>/apps/obs-rtmp/recordings:/recordings
