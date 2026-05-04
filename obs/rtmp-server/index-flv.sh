@@ -17,7 +17,7 @@ cleanup() {
 
 trap cleanup EXIT HUP INT TERM
 
-yamdi -i "$in" -o "$tmp"
+/usr/local/bin/yamdi -i "$in" -o "$tmp"
 mv -f "$tmp" "$in"
 
 trap - EXIT HUP INT TERM
