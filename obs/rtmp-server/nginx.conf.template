@@ -20,6 +20,7 @@ rtmp {
             record_path __RECORD_PATH__;
             record_unique on;
             record_suffix __RECORD_SUFFIX__;
+            exec_record_done /usr/local/bin/index-flv.sh $path;
         }
     }
 }

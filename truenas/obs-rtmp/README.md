@@ -12,6 +12,7 @@
 ```
 
 3. Убедитесь, что app сможет писать в этот dataset.
+4. Настройте ACL так, чтобы `nobody` внутри контейнера мог создавать, читать, писать, удалять и переименовывать файлы в `/recordings`.
 
 ## Что подставить в YAML
 
@@ -30,6 +31,10 @@
 - `Container port`: `1935`
 - `Host port`: `1935` или свой внешний порт
 - `Host path volume`: `/mnt/<pool>/apps/obs-rtmp/recordings` -> `/recordings`
+
+## ACL для записей
+
+`nginx-rtmp` пишет файлы как worker process, а после завершения stream запускает `yamdi` для индексирования `.flv`. Для этого dataset должен разрешать `nobody` не только запись, но и замену файла: create, read, write, delete и rename.
 
 ## Пример RTMP URL для OBS
 
