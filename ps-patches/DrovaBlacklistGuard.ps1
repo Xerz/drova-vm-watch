@@ -9,7 +9,9 @@ $EsmeRegistryPath = 'HKLM:\SOFTWARE\ITKey\Esme'
 $SessionsUri = 'https://services.drova.io/session-manager/sessions'
 $LogDirectory = Join-Path -Path $env:ProgramData -ChildPath 'Drova'
 $LogPath = Join-Path -Path $LogDirectory -ChildPath 'ClientBlacklistGuard.log'
-$BanMessage = 'К сожалению, владелец данного сервера запретил вам доступ к режиму рабочего стола. Контакты для связи смотрите на странице сервера. Сервер будет перезагружен в течение 5 минут'
+$ShutdownDelaySeconds = 60
+$ShutdownMessage = 'К сожалению, владелец данного сервера запретил вам доступ к нему. Связаться с владельцем вы можете по контактам, указанным в описании сервера. Сервер будет перезагружен в течение минуты.'
+$WindowMessage = ':('
 
 function Write-GuardLog {
     param(
@@ -216,11 +218,11 @@ function Invoke-DrovaBlacklistGuard {
         return
     }
 
-    Write-GuardLog -Level 'WARN' -Message ("Blocked client {0} connected. Scheduling a restart in 300 seconds." -f $clientId)
+    Write-GuardLog -Level 'WARN' -Message ("Blocked client {0} connected. Scheduling a restart in {1} seconds." -f $clientId, $ShutdownDelaySeconds)
 
     $shutdownPath = Join-Path -Path $env:SystemRoot -ChildPath 'System32\shutdown.exe'
     try {
-        & $shutdownPath /r /f /t 300 /c $BanMessage | Out-Null
+        & $shutdownPath /r /f /t $ShutdownDelaySeconds /c $ShutdownMessage | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-GuardLog -Level 'ERROR' -Message ("shutdown.exe returned exit code {0}." -f $LASTEXITCODE)
         }
@@ -230,7 +232,7 @@ function Invoke-DrovaBlacklistGuard {
     }
 
     try {
-        Show-BanWindow -Message $BanMessage
+        Show-BanWindow -Message $WindowMessage
     }
     catch {
         Write-GuardLog -Level 'ERROR' -Message ("Could not display the ban window: {0}" -f $_.Exception.Message)
