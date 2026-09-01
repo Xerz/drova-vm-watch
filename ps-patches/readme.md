@@ -50,7 +50,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-DrovaBlacklist
 
 - копирует guard в `C:\ProgramData\Drova\DrovaBlacklistGuard.ps1`;
 - создаёт задачу `\Drova\ClientBlacklistGuard`;
-- настраивает событие `Application / esme / 2001`;
+- настраивает событие `Application / esme / 2006` (подключение в режиме рабочего стола);
 - запрещает запуск второго экземпляра, пока работает первый.
 
 Файл `D:\bads.txt` не создаётся и не изменяется установщиком. Если его нет, будет
@@ -61,7 +61,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-DrovaBlacklist
 1. Откройте планировщик задач и проверьте задачу
    `\Drova\ClientBlacklistGuard`.
 2. На вкладке триггеров должно быть событие журнала `Application`, источник
-   `esme`, код `2001`.
+   `esme`, код `2006`.
 3. В свойствах задачи должен быть выбран текущий игровой пользователь и запуск
    только при его входе в систему с наивысшими правами.
 4. Сначала проверьте UUID, которого нет в `D:\bads.txt`: в журнале должна появиться

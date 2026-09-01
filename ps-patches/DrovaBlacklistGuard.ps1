@@ -9,7 +9,7 @@ $EsmeRegistryPath = 'HKLM:\SOFTWARE\ITKey\Esme'
 $SessionsUri = 'https://services.drova.io/session-manager/sessions'
 $LogDirectory = Join-Path -Path $env:ProgramData -ChildPath 'Drova'
 $LogPath = Join-Path -Path $LogDirectory -ChildPath 'ClientBlacklistGuard.log'
-$BanMessage = 'К сожалению, владелец данного сервера запретил вам доступ к нему. Если считаете, что зря, свяжитесь с ним — контакты смотрите в описании сервера. Сервер будет перезагружен в течение 5 минут'
+$BanMessage = 'К сожалению, владелец данного сервера запретил вам доступ к режиму рабочего стола. Контакты для связи смотрите на странице сервера. Сервер будет перезагружен в течение 5 минут'
 
 function Write-GuardLog {
     param(

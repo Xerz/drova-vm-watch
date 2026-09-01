@@ -103,7 +103,7 @@ $taskXml = @"
   <Triggers>
     <EventTrigger>
       <Enabled>true</Enabled>
-      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Application"&gt;&lt;Select Path="Application"&gt;*[System[Provider[@Name='esme'] and EventID=2001]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
+      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Application"&gt;&lt;Select Path="Application"&gt;*[System[Provider[@Name='esme'] and EventID=2006]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
     </EventTrigger>
   </Triggers>
   <Principals>
@@ -148,4 +148,4 @@ Register-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath -Xml $taskXml -Fo
 Write-Host ("Установлен скрипт: {0}" -f $DestinationScript)
 Write-Host ("Зарегистрирована задача: {0}{1}" -f $TaskPath, $TaskName)
 Write-Host ("Задача привязана к интерактивному пользователю: {0}" -f $currentIdentity.Name)
-Write-Host 'Триггер: журнал Application, источник esme, EventID 2001.'
+Write-Host 'Триггер: журнал Application, источник esme, EventID 2006.'
