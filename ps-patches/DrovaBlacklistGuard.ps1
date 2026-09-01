@@ -135,7 +135,8 @@ function Invoke-DrovaBlacklistGuard {
             return
         }
 
-        $serverRegistryPath = $EsmeRegistryPath + '\servers' + $serverId
+        $serversRegistryPath = Join-Path -Path $EsmeRegistryPath -ChildPath 'servers'
+        $serverRegistryPath = Join-Path -Path $serversRegistryPath -ChildPath $serverId
         $serverProperties = Get-ItemProperty -LiteralPath $serverRegistryPath -ErrorAction Stop
         $authToken = ([string]$serverProperties.auth_token).Trim()
         if ([string]::IsNullOrWhiteSpace($authToken)) {
