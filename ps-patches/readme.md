@@ -87,3 +87,30 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-DrovaBlacklist
 
 Задача и установленный guard будут удалены. Файл `D:\bads.txt` и журнал останутся
 на месте.
+
+## SRBMiner и лимиты питания NVIDIA
+
+Скопируйте `Install-DrovaMining.ps1` и `Set-DrovaGpuProfile.ps1` в одну папку.
+На каждом игровом ПК запустите установку из 64-разрядного Windows PowerShell от администратора.
+Укажите фактический путь на смонтированном iSCSI-томе и свой Mining Username из профиля Kryptex.
+
+```powershell
+.\Install-DrovaMining.ps1 -MinerPath 'D:\Mining\SRBMiner-MULTI.exe' -KryptexLogin 'krxXXXXXX'
+```
+
+Установщик создаёт или обновляет три задачи в Планировщике Windows.
+
+- `\Drova\Miner` запускается вручную. Задача выполняет EXE напрямую от LocalService, которому нужен доступ на чтение и исполнение в каталоге майнера. Рабочий каталог — папка EXE. Для Pearl используется пул Kryptex, CPU отключён, имя воркера берётся из имени компьютера при установке.
+- `\Drova\PowerLimitBoot` при загрузке ставит каждой NVIDIA-карте 80% её заводского PL с учётом нижней границы драйвера. Если драйвер ещё не готов, Планировщик повторяет попытку до трёх раз.
+- `\Drova\PrepareGpuForSession` при событии `Application / esme / 2001` останавливает задачу майнера и возвращает каждой карте заводской PL. После сессии майнер можно запустить вручную. Повторный запуск майнера не меняет PL.
+
+Команды управления и проверки:
+
+```powershell
+schtasks /Run /TN "\Drova\Miner"
+schtasks /End /TN "\Drova\Miner"
+nvidia-smi --query-gpu=name,power.limit,power.default_limit --format=csv
+Get-Content "$env:ProgramFiles\Drova\Mining\gpu.log" -Tail 20
+```
+
+Для проверки подключитесь к игровой сессии и убедитесь, что процесс SRBMiner завершён, а оба столбца PL совпадают для каждой карты. Чтобы удалить три задачи и локальный скрипт, выполните `.\Install-DrovaMining.ps1 -Uninstall`. Журнал и файлы майнера сохраняются.

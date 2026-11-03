@@ -3,6 +3,7 @@ $ErrorActionPreference = "SilentlyContinue"
 $parsecServiceName = "Parsec"
 
 $processes = @(
+    "SRBMiner-MULTI",
     "EpicGamesLauncher",
     "steam",
     "upc",
