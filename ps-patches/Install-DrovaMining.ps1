@@ -86,38 +86,41 @@ if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
     Write-Warning 'Microsoft Defender cmdlets unavailable; skipping the miner directory exclusion.'
 }
 
-$system = New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
 $localService = New-ScheduledTaskPrincipal -UserId 'S-1-5-19' -LogonType ServiceAccount
 $powerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $argsPrefix = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $scriptPath
-$boot = New-ScheduledTaskAction -Execute $powerShell -Argument "$argsPrefix -Mode Boot" -WorkingDirectory $directory
-# Register the event subscription as XML, as in Install-DrovaBlacklistGuard.ps1.
-$sessionXml = @"
+function Register-GpuProfileTask($Name, $Mode, $TriggerXml, $RetryXml) {
+    $xml = @"
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <Triggers>
-    <EventTrigger>
-      <Subscription><![CDATA[<QueryList><Query Id="0" Path="Application"><Select Path="Application">*[System[Provider[@Name='esme'] and EventID=2001]]</Select></Query></QueryList>]]></Subscription>
-    </EventTrigger>
-  </Triggers>
+  <Triggers>$TriggerXml</Triggers>
   <Principals><Principal id="System"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+    $RetryXml
   </Settings>
   <Actions Context="System">
     <Exec>
       <Command>$([Security.SecurityElement]::Escape($powerShell))</Command>
-      <Arguments>$([Security.SecurityElement]::Escape("$argsPrefix -Mode Session"))</Arguments>
+      <Arguments>$([Security.SecurityElement]::Escape("$argsPrefix -Mode $Mode"))</Arguments>
       <WorkingDirectory>$([Security.SecurityElement]::Escape($directory))</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>
 "@
-Register-ScheduledTask -TaskPath $taskPath -TaskName PrepareGpuForSession -Xml $sessionXml -Force | Out-Null
-$bootSettings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-Register-ScheduledTask -TaskPath $taskPath -TaskName PowerLimitBoot -Action $boot -Trigger (New-ScheduledTaskTrigger -AtStartup) -Principal $system -Settings $bootSettings -Force | Out-Null
+    Register-ScheduledTask -TaskPath $taskPath -TaskName $Name -Xml $xml -Force | Out-Null
+}
+
+$sessionTrigger = @'
+<EventTrigger>
+  <Subscription><![CDATA[<QueryList><Query Id="0" Path="Application"><Select Path="Application">*[System[Provider[@Name='esme'] and EventID=2001]]</Select></Query></QueryList>]]></Subscription>
+</EventTrigger>
+'@
+Register-GpuProfileTask -Name PrepareGpuForSession -Mode Session -TriggerXml $sessionTrigger
+$bootRetry = '<RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>'
+Register-GpuProfileTask -Name PowerLimitBoot -Mode Boot -TriggerXml '<BootTrigger />' -RetryXml $bootRetry
 
 # Kryptex email logins require a slash; Mining Usernames support dot-separated workers.
 $separator = if ($KryptexLogin.Contains('@')) { '/' } else { '.' }
