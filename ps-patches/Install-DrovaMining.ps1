@@ -102,7 +102,9 @@ Register-ScheduledTask -TaskPath $taskPath -TaskName PrepareGpuForSession -Actio
 $bootSettings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
 Register-ScheduledTask -TaskPath $taskPath -TaskName PowerLimitBoot -Action $boot -Trigger (New-ScheduledTaskTrigger -AtStartup) -Principal $system -Settings $bootSettings -Force | Out-Null
 
-$arguments = '--disable-cpu --algorithm pearlhash --pool prl.kryptex.network:7048 --wallet "{0}/{1}"' -f $KryptexLogin,$env:COMPUTERNAME
+# Kryptex email logins require a slash; Mining Usernames support dot-separated workers.
+$separator = if ($KryptexLogin.Contains('@')) { '/' } else { '.' }
+$arguments = '--disable-cpu --algorithm pearlhash --pool prl-ru.kryptex.network:8048 --wallet "{0}{1}{2}" --tls true' -f $KryptexLogin,$separator,$env:COMPUTERNAME
 $minerAction = New-ScheduledTaskAction -Execute $miner.FullName -Argument $arguments -WorkingDirectory $miner.DirectoryName
 $minerSettings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
 Register-ScheduledTask -TaskPath $taskPath -TaskName Miner -Action $minerAction -Settings $minerSettings -Principal $localService -Force | Out-Null
