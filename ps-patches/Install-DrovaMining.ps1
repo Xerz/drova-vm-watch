@@ -51,6 +51,12 @@ if ($Uninstall) {
     return
 }
 
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+if ($identity.IsSystem -or -not [Environment]::UserInteractive) {
+    throw 'Run the installer from an elevated PowerShell in the gaming user account.'
+}
+$minerPrincipal = New-ScheduledTaskPrincipal -UserId $identity.User.Value -LogonType Interactive -RunLevel Limited
+
 $miner = Get-Item -LiteralPath $MinerPath
 if ($miner.PSIsContainer -or $miner.Name -ine 'SRBMiner-MULTI.exe') {
     throw 'Specify the mounted path to SRBMiner-MULTI.exe.'
@@ -86,7 +92,6 @@ if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
     Write-Warning 'Microsoft Defender cmdlets unavailable; skipping the miner directory exclusion.'
 }
 
-$localService = New-ScheduledTaskPrincipal -UserId 'S-1-5-19' -LogonType ServiceAccount
 $powerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $argsPrefix = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $scriptPath
 function Register-GpuProfileTask($Name, $Mode, $TriggerXml, $RetryXml) {
@@ -127,5 +132,5 @@ $separator = if ($KryptexLogin.Contains('@')) { '/' } else { '.' }
 $arguments = '--disable-cpu --algorithm pearlhash --pool prl-ru.kryptex.network:8048 --wallet "{0}{1}{2}" --tls true' -f $KryptexLogin,$separator,$env:COMPUTERNAME
 $minerAction = New-ScheduledTaskAction -Execute $miner.FullName -Argument $arguments -WorkingDirectory $miner.DirectoryName
 $minerSettings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
-Register-ScheduledTask -TaskPath $taskPath -TaskName Miner -Action $minerAction -Settings $minerSettings -Principal $localService -Force | Out-Null
+Register-ScheduledTask -TaskPath $taskPath -TaskName Miner -Action $minerAction -Settings $minerSettings -Principal $minerPrincipal -Force | Out-Null
 Write-Host 'Installed \Drova\Miner, \Drova\PowerLimitBoot and \Drova\PrepareGpuForSession.'
