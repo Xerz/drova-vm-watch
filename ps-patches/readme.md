@@ -98,6 +98,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-DrovaBlacklist
 .\Install-DrovaMining.ps1 -MinerPath 'D:\Mining\SRBMiner-MULTI.exe' -KryptexLogin 'krxXXXXXX'
 ```
 
+Установщик добавляет папку EXE (в примере `D:\Mining`) в исключения Microsoft Defender. Используйте отдельный каталог для майнера. Если Defender уже поместил EXE в карантин, сначала восстановите файл в журнале защиты Windows. При смене пути или запуске с `-Uninstall` установщик снимает созданное им исключение. Исключения, добавленные до установки, сохраняются.
+
 Установщик создаёт или обновляет три задачи в Планировщике Windows.
 
 - `\Drova\Miner` запускается вручную. Задача выполняет EXE напрямую от LocalService, которому нужен доступ на чтение и исполнение в каталоге майнера. Рабочий каталог — папка EXE. Для Pearl используется пул Kryptex, CPU отключён, имя воркера берётся из имени компьютера при установке.
