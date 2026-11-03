@@ -88,17 +88,34 @@ if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
 
 $system = New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
 $localService = New-ScheduledTaskPrincipal -UserId 'S-1-5-19' -LogonType ServiceAccount
-$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
 $powerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $argsPrefix = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $scriptPath
 $boot = New-ScheduledTaskAction -Execute $powerShell -Argument "$argsPrefix -Mode Boot" -WorkingDirectory $directory
-$session = New-ScheduledTaskAction -Execute $powerShell -Argument "$argsPrefix -Mode Session" -WorkingDirectory $directory
-$event = New-CimInstance -Namespace 'Root/Microsoft/Windows/TaskScheduler' -ClassName MSFT_TaskEventTrigger -ClientOnly -Property @{
-    Enabled = $true
-    Subscription = '<QueryList><Query Id="0" Path="Application"><Select Path="Application">*[System[Provider[@Name=''esme''] and EventID=2001]]</Select></Query></QueryList>'
-}
-
-Register-ScheduledTask -TaskPath $taskPath -TaskName PrepareGpuForSession -Action $session -Trigger $event -Principal $system -Settings $settings -Force | Out-Null
+# Register the event subscription as XML, as in Install-DrovaBlacklistGuard.ps1.
+$sessionXml = @"
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers>
+    <EventTrigger>
+      <Subscription><![CDATA[<QueryList><Query Id="0" Path="Application"><Select Path="Application">*[System[Provider[@Name='esme'] and EventID=2001]]</Select></Query></QueryList>]]></Subscription>
+    </EventTrigger>
+  </Triggers>
+  <Principals><Principal id="System"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+  </Settings>
+  <Actions Context="System">
+    <Exec>
+      <Command>$([Security.SecurityElement]::Escape($powerShell))</Command>
+      <Arguments>$([Security.SecurityElement]::Escape("$argsPrefix -Mode Session"))</Arguments>
+      <WorkingDirectory>$([Security.SecurityElement]::Escape($directory))</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+"@
+Register-ScheduledTask -TaskPath $taskPath -TaskName PrepareGpuForSession -Xml $sessionXml -Force | Out-Null
 $bootSettings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
 Register-ScheduledTask -TaskPath $taskPath -TaskName PowerLimitBoot -Action $boot -Trigger (New-ScheduledTaskTrigger -AtStartup) -Principal $system -Settings $bootSettings -Force | Out-Null
 

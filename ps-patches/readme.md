@@ -100,11 +100,47 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-DrovaBlacklist
 
 Установщик добавляет папку EXE (в примере `D:\Mining`) в исключения Microsoft Defender. Используйте отдельный каталог для майнера. Если Defender уже поместил EXE в карантин, сначала восстановите файл в журнале защиты Windows. При смене пути или запуске с `-Uninstall` установщик снимает созданное им исключение. Исключения, добавленные до установки, сохраняются.
 
-Установщик создаёт или обновляет три задачи в Планировщике Windows.
+### Какие аргументы получает SRBMiner
 
-- `\Drova\Miner` запускается вручную. Задача выполняет EXE напрямую от LocalService, которому нужен доступ на чтение и исполнение в каталоге майнера. Рабочий каталог — папка EXE. Для Pearl используется пул Kryptex, CPU отключён, имя воркера берётся из имени компьютера при установке.
-- `\Drova\PowerLimitBoot` при загрузке ставит каждой NVIDIA-карте 80% её заводского PL с учётом нижней границы драйвера. Если драйвер ещё не готов, Планировщик повторяет попытку до трёх раз.
-- `\Drova\PrepareGpuForSession` при событии `Application / esme / 2001` останавливает задачу майнера и возвращает каждой карте заводской PL. После сессии майнер можно запустить вручную. Повторный запуск майнера не меняет PL.
+При логине `krxXXXXXX` и имени компьютера `fifth` задача `\Drova\Miner` запускает такую команду:
+
+```powershell
+& 'D:\Mining\SRBMiner-MULTI.exe' --disable-cpu --algorithm pearlhash --pool prl-ru.kryptex.network:8048 --wallet "krxXXXXXX.fifth" --tls true
+```
+
+| Аргумент | Назначение |
+| --- | --- |
+| `--disable-cpu` | Отключает майнинг на CPU. |
+| `--algorithm pearlhash` | Выбирает алгоритм для Pearl (PRL). |
+| `--pool prl-ru.kryptex.network:8048` | Подключает майнер к российскому серверу пула Kryptex. |
+| `--wallet` | Установщик соединяет `-KryptexLogin` и `$env:COMPUTERNAME`. Для Mining Username получается `krxXXXXXX.fifth`, для email — `user@example.com/fifth`. |
+| `--tls true` | Включает TLS для соединения с пулом. |
+
+Чтобы посмотреть фактическую команду на конкретном ПК:
+
+```powershell
+(Get-ScheduledTask -TaskPath '\Drova\' -TaskName Miner).Actions | Format-List Execute,Arguments,WorkingDirectory
+```
+
+### Как работают задачи Планировщика Windows
+
+```mermaid
+flowchart TD
+    boot(["Загрузка Windows"]) --> bootTask["PowerLimitBoot"]
+    bootTask --> lowPower["Установить 80% заводского PL каждой GPU"]
+
+    manual(["Ручной запуск"]) --> minerTask["Miner"]
+    minerTask --> mining["Запустить SRBMiner с текущим PL"]
+
+    session(["Подключение к сессии Drova"]) --> eventLog["Application / esme / 2001"]
+    eventLog --> sessionTask["PrepareGpuForSession"]
+    sessionTask --> stopMiner["Остановить задачу Miner"]
+    stopMiner --> fullPower["Вернуть 100% заводского PL каждой GPU"]
+```
+
+Все три задачи находятся в `\Drova\`. Загрузочная задача учитывает минимальный PL каждой карты. Если драйвер ещё не готов, Планировщик повторяет попытку до трёх раз. После обработки подключения поздняя загрузочная попытка пропускает установку 80%.
+
+Майнер работает от LocalService с рабочим каталогом в папке EXE. Этой учётной записи нужен доступ к майнеру на чтение и исполнение. После завершения сессии майнер остаётся остановленным до ручного запуска. Если запустить его снова до перезагрузки, сохранится игровой PL 100%.
 
 Команды управления и проверки:
 
